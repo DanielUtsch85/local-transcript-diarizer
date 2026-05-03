@@ -1,13 +1,14 @@
 # Local Transcript Diarizer
 
-A local macOS-first app for transcribing audio files, detecting speakers locally, renaming speaker labels, and exporting clean conversation transcripts as DOCX or HTML.
+A local macOS-first app for transcribing audio files, detecting speakers locally, exporting clean conversation transcripts, and building target-speaker voice-reference packs for consent-based synthetic audio experiments.
 
 ## What Runs Locally
 
 - Transcription: WhisperX / faster-whisper
 - Speaker diarization: local `diarize`, no account required
-- Voice activity detection: pyannote VAD by default; Silero is optional when cached locally
-- Export: DOCX und HTML
+- Voice activity detection: pyannote VAD for transcription; Silero VAD for voice-segment scoring when available
+- Export: DOCX, HTML, feedback CSV, diarization JSON, and diarization JSONL
+- Voice pipeline: target-speaker curation, reference-pack building, mock synthesis, metadata logging
 - No OpenAI API, no cloud transcription API
 
 Speaker detection runs locally with `diarize`. No token, paid service, or cloud account is required.
@@ -54,7 +55,8 @@ Streamlit will open the local app in your browser.
 4. Optionally set min/max speaker counts.
 5. Start transcription.
 6. Rename speaker labels after processing.
-7. Download DOCX, HTML, and feedback CSV outputs.
+7. Download DOCX, HTML, feedback CSV, and diarization JSON/JSONL outputs.
+8. Optionally open the separate Voice-Pipeline page for target-speaker curation and synthesis.
 
 ## Recommended Settings
 
@@ -80,6 +82,28 @@ When speaker detection is enabled, the app:
 
 You can then rename labels like `SPEAKER_00` to real names before exporting.
 
+The app keeps the raw local diarization time ranges separately from the rendered transcript segments. Diarization JSON/JSONL exports and the Voice-Pipeline page use these raw speaker time ranges when available, because they are better suited for later segment curation.
+
+## Diarization Export
+
+After a run with a known source audio file, the export panel offers:
+
+- diarization JSON
+- diarization JSONL
+
+Both formats use the voice-pipeline schema:
+
+```json
+{
+  "speaker": "SPEAKER_00",
+  "start": 12.34,
+  "end": 19.82,
+  "source_file": "data/uploads/interview.mp3"
+}
+```
+
+These exports are useful when transcription and speaker detection are done in one session, but voice-reference curation happens later.
+
 ## Feedback CSV
 
 Each completed run creates a feedback CSV with:
@@ -94,17 +118,39 @@ Each completed run creates a feedback CSV with:
 
 This helps evaluate whether a run looks technically and structurally plausible without manually inspecting the full transcript.
 
-## Privacy
+## Voice-Pipeline Page
+
+The sidebar has two app areas:
+
+- `Transkription`
+- `Voice-Pipeline`
+
+The Voice-Pipeline page can use the current audio and speaker segments from the transcription run, or it can accept an audio file plus diarization JSON/JSONL manually. It supports:
+
+- target-speaker selection
+- audio preparation to mono WAV at 16 kHz or 24 kHz
+- target-speaker segment extraction
+- quality scoring with RMS, peak, clipping, speech ratio, silence ratio, simple SNR, and overlap metrics
+- overlap rejection for segments that collide with another speaker
+- accepted/rejected segment folders
+- reference-pack building
+- optional mock, XTTS, or OpenVoice synthesis
+- synthetic sidecar metadata and synthesis JSONL logging
+- Voice-Pipeline feedback CSV export
+
+## Privacy and Consent
 
 Audio files, generated transcripts, feedback CSVs, local runs, model caches, and virtual environments are not meant to be committed. The `.gitignore` excludes local uploads and run artifacts by default.
 
 Before publishing or sharing logs, check that they do not contain private transcript excerpts.
 
+Voice synthesis and voice-cloning workflows must only be used with explicit consent from the target speaker. Generated audio must be disclosed as synthetic.
+
 ---
 
 # Voice Pipeline
 
-`voice_pipeline` is a modular CLI pipeline for turning existing diarization output into clean target-speaker reference clips and synthetic voice samples. It assumes speaker diarization and initial speaker localization have already happened.
+`voice_pipeline` is the modular pipeline behind the Voice-Pipeline app page and is also exposed as a CLI. It turns existing diarization output into clean target-speaker reference clips and synthetic voice samples. It assumes speaker diarization and initial speaker localization have already happened.
 
 ## Consent and Synthetic Media Disclosure
 
@@ -134,7 +180,7 @@ python -m pip install -e ".[dev]"
 Optional heavy dependencies are intentionally not required for tests:
 
 - `faster-whisper` for transcription inside scoring
-- Silero VAD via `silero-vad` when available, with an energy-based fallback
+- Silero VAD via `silero-vad` when available, with internal 16 kHz resampling for 24 kHz clips and an energy-based fallback
 - Coqui `TTS` for XTTS-v2 synthesis
 - OpenVoice V2 plus checkpoints for OpenVoice synthesis
 
@@ -253,6 +299,7 @@ data/output/SPEAKER_02/
     accepted.jsonl
     rejected.jsonl
     synthesis_runs.jsonl
+    voice_feedback.csv
   report.md
 ```
 
@@ -266,6 +313,32 @@ sample_xtts_001.wav.synthetic.json
 
 Defaults live in `configs/default.yaml`. You can pass another file to commands that accept `--config`; unspecified keys fall back to built-in defaults.
 
+Important quality defaults include:
+
+- `min_duration_sec: 2.0`
+- `max_duration_sec: 15.0`
+- `min_speech_ratio: 0.75`
+- `max_clipping_ratio: 0.001`
+- `max_overlap_sec: 0.0`
+
+The default overlap policy rejects target-speaker clips that overlap another speaker in the diarization export.
+
+## Voice Feedback CSV
+
+Each Voice-Pipeline run writes `manifests/voice_feedback.csv`. It captures:
+
+- selected speaker and source files
+- pipeline settings
+- raw, scored, accepted, and rejected segment counts
+- acceptance rate
+- accepted duration totals and distribution
+- overlap counts and rejected-overlap counts
+- reject-reason counts
+- reference-pack target and actual duration
+- synthesis backend and output path when synthesis was run
+
+Use this file to compare whether pipeline changes improve curation quality over repeated runs.
+
 ## Troubleshooting
 
 - `ffmpeg is required`: install `ffmpeg` and make sure it is on `PATH`.
@@ -273,3 +346,4 @@ Defaults live in `configs/default.yaml`. You can pass another file to commands t
 - `Install coqui-tts/TTS`: XTTS-v2 is isolated behind the adapter and only needed for real XTTS synthesis.
 - `OpenVoice V2 ... checkpoints`: OpenVoice requires a separate repository/checkpoint setup; the adapter boundary is present but checkpoint-specific wiring must be configured.
 - `synthesis requires --consent-confirmed`: confirm explicit target-speaker consent and rerun with the required flag.
+- `accepted_count` is unexpectedly `0`: check `voice_feedback.csv` reject reasons. If `low_speech_ratio` dominates, confirm Silero VAD is installed and that the clips are readable WAV files. If `overlaps_other_speaker` dominates, try disabling overlap rejection for diagnosis, but keep it enabled for high-quality reference packs.
