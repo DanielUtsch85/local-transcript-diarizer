@@ -189,7 +189,7 @@ with st.sidebar:
         value=True,
         help="Deutlich weniger RAM-Verbrauch. Dafuer langsamer und etwas weniger genau.",
     )
-    default_model_index = 1 if memory_mode else 2
+    default_model_index = 1
     model = st.selectbox("Whisper-Modell", ["small", "medium", "large-v3"], index=default_model_index)
     language = st.selectbox("Sprache", ["de", "en", "auto"], index=0)
     diarize_choice = st.radio(
