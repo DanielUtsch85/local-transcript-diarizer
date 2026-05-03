@@ -9,7 +9,7 @@ from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.shared import Pt
 
-from .models import SpeakerMapping, TranscriptSegment
+from .models import SpeakerMapping, SpeakerSegment, TranscriptSegment
 
 
 def build_docx(segments: list[TranscriptSegment], mapping: SpeakerMapping, title: str) -> bytes:
@@ -63,17 +63,17 @@ def build_html(segments: list[TranscriptSegment], mapping: SpeakerMapping, title
 """
 
 
-def build_diarization_json(segments: list[TranscriptSegment], source_file: str | Path) -> str:
+def build_diarization_json(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> str:
     rows = _diarization_rows(segments, source_file)
     return json.dumps(rows, ensure_ascii=False, indent=2) + "\n"
 
 
-def build_diarization_jsonl(segments: list[TranscriptSegment], source_file: str | Path) -> str:
+def build_diarization_jsonl(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> str:
     rows = _diarization_rows(segments, source_file)
     return "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
 
 
-def _diarization_rows(segments: list[TranscriptSegment], source_file: str | Path) -> list[dict]:
+def _diarization_rows(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> list[dict]:
     source = str(source_file)
     return [
         {

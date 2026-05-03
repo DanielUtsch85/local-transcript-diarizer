@@ -183,6 +183,9 @@ st.set_page_config(page_title="Lokale Transkription", layout="wide")
 st.title("Lokale Transkription")
 st.caption("MP3 rein, Sprecherlabels pruefen, Word-Datei raus.")
 
+if st.session_state.pop("open_voice_pipeline", False):
+    st.session_state.active_page = "Voice-Pipeline"
+
 page = st.sidebar.radio(
     "Bereich",
     ["Transkription", "Voice-Pipeline"],
@@ -210,19 +213,75 @@ with st.sidebar:
         help="Sprecher erkennen trennt die Unterhaltung in Sprecherlabels. Nur transkribieren ist schneller.",
     )
     diarize = diarize_choice == "Sprecher erkennen"
-    min_speakers = st.number_input("Min. Sprecher", min_value=0, max_value=20, value=0)
-    max_speakers = st.number_input("Max. Sprecher", min_value=0, max_value=20, value=0)
+    min_speakers = st.number_input(
+        "Min. Sprecher",
+        min_value=0,
+        max_value=20,
+        value=1,
+        help="Untere Grenze fuer die Sprechererkennung. 1 ist sinnvoll, wenn mindestens eine Stimme sicher vorhanden ist.",
+    )
+    max_speakers = st.number_input(
+        "Max. Sprecher",
+        min_value=0,
+        max_value=20,
+        value=2,
+        help="Obere Grenze fuer die Sprechererkennung. 2 passt gut fuer Interviews; hoeher setzen, wenn mehr Personen sprechen.",
+    )
     with st.expander("Leistung & Speicher"):
         if memory_mode:
-            batch_size = st.number_input("Batch-Groesse", min_value=1, max_value=16, value=1)
-            chunk_size = st.number_input("Chunk-Groesse Sekunden", min_value=5, max_value=60, value=20)
-            no_align = st.toggle("Wortgenaue Ausrichtung sparen", value=False)
-            threads = st.number_input("CPU-Threads", min_value=0, max_value=16, value=4)
+            batch_size = st.number_input(
+                "Batch-Groesse",
+                min_value=1,
+                max_value=16,
+                value=1,
+                help="Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. Kleinere Werte brauchen weniger RAM, sind aber langsamer.",
+            )
+            chunk_size = st.number_input(
+                "Chunk-Groesse Sekunden",
+                min_value=5,
+                max_value=60,
+                value=20,
+                help="Laenge der Audio-Bloecke fuer die Transkription. Kleinere Chunks senken Speicherverbrauch, koennen aber etwas langsamer und weniger stabil im Kontext sein.",
+            )
+            no_align = st.toggle(
+                "Wortgenaue Ausrichtung sparen",
+                value=False,
+                help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
+            )
+            threads = st.number_input(
+                "CPU-Threads",
+                min_value=0,
+                max_value=16,
+                value=4,
+                help="Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; mehr Threads koennen schneller sein, belasten aber den Rechner staerker.",
+            )
         else:
-            batch_size = st.number_input("Batch-Groesse", min_value=1, max_value=16, value=4)
-            chunk_size = st.number_input("Chunk-Groesse Sekunden", min_value=5, max_value=60, value=30)
-            no_align = st.toggle("Wortgenaue Ausrichtung sparen", value=False)
-            threads = st.number_input("CPU-Threads", min_value=0, max_value=16, value=0)
+            batch_size = st.number_input(
+                "Batch-Groesse",
+                min_value=1,
+                max_value=16,
+                value=4,
+                help="Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. Groessere Werte koennen schneller sein, brauchen aber deutlich mehr RAM.",
+            )
+            chunk_size = st.number_input(
+                "Chunk-Groesse Sekunden",
+                min_value=5,
+                max_value=60,
+                value=30,
+                help="Laenge der Audio-Bloecke fuer die Transkription. Groessere Chunks geben dem Modell mehr Kontext, brauchen aber mehr Speicher.",
+            )
+            no_align = st.toggle(
+                "Wortgenaue Ausrichtung sparen",
+                value=False,
+                help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
+            )
+            threads = st.number_input(
+                "CPU-Threads",
+                min_value=0,
+                max_value=16,
+                value=0,
+                help="Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; feste Werte koennen Last und Laufzeit planbarer machen.",
+            )
         vad_method = st.selectbox(
             "Spracherkennung vor Transkription",
             ["pyannote", "silero"],
@@ -247,6 +306,8 @@ if "feedback_csv" not in st.session_state:
     st.session_state.feedback_csv = None
 if "feedback_filename" not in st.session_state:
     st.session_state.feedback_filename = "feedback.csv"
+if "speaker_segments" not in st.session_state:
+    st.session_state.speaker_segments = []
 
 left, right = st.columns([2, 1])
 
@@ -265,6 +326,7 @@ with left:
             audio_path = save_upload(uploaded, DATA_DIR / "uploads")
             st.session_state.last_audio_path = str(audio_path)
             st.session_state.last_run_dir = str(run_dir)
+            st.session_state.speaker_segments = []
             audio_duration = get_audio_duration(audio_path)
             estimate = estimate_processing_seconds(
                 audio_seconds=audio_duration,
@@ -414,6 +476,7 @@ with left:
                         min_speakers=min_speakers or None,
                         max_speakers=max_speakers or None,
                     )
+                    st.session_state.speaker_segments = speaker_segments
                     speaker_segments_count = len(speaker_segments)
                     update_overall_progress(0.97, "Sprecher werden dem Transkript zugeordnet.")
                     st.session_state.segments = assign_speakers_by_overlap(
@@ -466,6 +529,7 @@ with left:
         transcript = json.loads(uploaded_json.getvalue().decode("utf-8"))
         st.session_state.source_name = Path(uploaded_json.name).stem
         st.session_state.segments = render_segments(transcript)
+        st.session_state.speaker_segments = []
 
 with right:
     st.subheader("Export")
@@ -502,8 +566,9 @@ with right:
             )
         last_audio_path = st.session_state.get("last_audio_path")
         if last_audio_path:
-            diarization_json = build_diarization_json(st.session_state.segments, last_audio_path)
-            diarization_jsonl = build_diarization_jsonl(st.session_state.segments, last_audio_path)
+            diarization_source = st.session_state.speaker_segments or st.session_state.segments
+            diarization_json = build_diarization_json(diarization_source, last_audio_path)
+            diarization_jsonl = build_diarization_jsonl(diarization_source, last_audio_path)
             st.download_button(
                 "Diarization JSON herunterladen",
                 data=diarization_json.encode("utf-8"),
@@ -519,7 +584,7 @@ with right:
         else:
             st.caption("Diarization-Export erscheint, sobald die zugehoerige Audio-Datei in dieser Sitzung bekannt ist.")
         if st.button("Voice-Pipeline oeffnen"):
-            st.session_state.active_page = "Voice-Pipeline"
+            st.session_state.open_voice_pipeline = True
             st.rerun()
 
 if st.session_state.segments:

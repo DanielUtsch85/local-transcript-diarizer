@@ -1,7 +1,7 @@
 import json
 
 from transcript_mvp.exports import build_diarization_json, build_diarization_jsonl
-from transcript_mvp.models import TranscriptSegment
+from transcript_mvp.models import SpeakerSegment, TranscriptSegment
 
 
 def test_build_diarization_json_matches_voice_pipeline_schema():
@@ -38,3 +38,19 @@ def test_build_diarization_jsonl_writes_one_object_per_line():
 
     assert [row["speaker"] for row in lines] == ["SPEAKER_01", "SPEAKER_02"]
     assert all(row["source_file"] == "/tmp/interview.wav" for row in lines)
+
+
+def test_build_diarization_json_accepts_raw_speaker_segments():
+    payload = build_diarization_json(
+        [
+            SpeakerSegment(start=0.1, end=1.5, speaker="SPEAKER_00"),
+            SpeakerSegment(start=1.6, end=2.5, speaker="SPEAKER_01"),
+        ],
+        "/tmp/interview.wav",
+    )
+
+    rows = json.loads(payload)
+
+    assert len(rows) == 2
+    assert rows[0]["speaker"] == "SPEAKER_00"
+    assert rows[0]["start"] == 0.1

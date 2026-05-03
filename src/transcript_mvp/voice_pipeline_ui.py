@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from transcript_mvp.models import TranscriptSegment
+from transcript_mvp.models import SpeakerSegment, TranscriptSegment
 from voice_pipeline.audio_io import cut_segment, prepare_audio
 from voice_pipeline.config import load_config
 from voice_pipeline.logging_utils import read_jsonl, write_jsonl
@@ -105,10 +105,14 @@ def _resolve_source_audio(data_dir: Path) -> Path | None:
 
 
 def _resolve_diarization_source(data_dir: Path, source_audio: Path | None) -> Path | None:
+    source_segments = st.session_state.get("speaker_segments") or st.session_state.get("segments", [])
     usable_segments = [
         segment
-        for segment in st.session_state.get("segments", [])
-        if isinstance(segment, TranscriptSegment) and segment.start is not None and segment.end is not None
+        for segment in source_segments
+        if isinstance(segment, (SpeakerSegment, TranscriptSegment))
+        and segment.start is not None
+        and segment.end is not None
+        and segment.end > segment.start
     ]
     if usable_segments and source_audio is not None:
         if st.checkbox("Aktuelle Sprechersegmente aus der App verwenden", value=True):
