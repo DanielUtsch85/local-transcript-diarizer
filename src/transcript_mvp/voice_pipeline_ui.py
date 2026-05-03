@@ -393,7 +393,7 @@ def _backend(name: str):
 
 def _backend_hint(name: str) -> str:
     if name == "xtts":
-        return "XTTS benoetigt die optionale Coqui-TTS/TTS Installation und kann Modell-Downloads ausloesen."
+        return "XTTS laeuft bewusst in einer separaten Umgebung. Richte sie mit `bash scripts/setup_xtts_env.sh` ein oder setze `XTTS_PYTHON`."
     if name == "openvoice":
         return "OpenVoice benoetigt eine separate OpenVoice-V2 Installation plus konfigurierte Checkpoints."
     return "Mock erzeugt nur ein Test-WAV und benoetigt keine Modellinstallation."

@@ -1,7 +1,7 @@
 altair>=5
 diarize>=0.1.1
-numpy>=1.24
-pandas>=1.4
+numpy>=2.2.2
+pandas>=2.2.3
 psutil>=5.9
 pyyaml>=6.0
 streamlit>=1.35

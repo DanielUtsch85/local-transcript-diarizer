@@ -181,8 +181,24 @@ Optional heavy dependencies are intentionally not required for tests:
 
 - `faster-whisper` for transcription inside scoring
 - Silero VAD via `silero-vad` when available, with internal 16 kHz resampling for 24 kHz clips and an energy-based fallback
-- Coqui `TTS` for XTTS-v2 synthesis
+- Coqui `TTS` for XTTS-v2 synthesis, installed in a separate environment
 - OpenVoice V2 plus checkpoints for OpenVoice synthesis
+
+## Isolated XTTS Environment
+
+Do not install Coqui `TTS` into the main `.venv`. Current WhisperX/pyannote dependencies need modern `numpy` and `pandas`, while `TTS 0.22.0` pulls older versions. Keep XTTS isolated:
+
+```bash
+bash scripts/setup_xtts_env.sh
+```
+
+The app looks for `.venv-xtts/bin/python` by default. If you keep XTTS somewhere else, set:
+
+```bash
+export XTTS_PYTHON=/absolute/path/to/xtts/python
+```
+
+XTTS may download model weights on first use. Review the XTTS-v2 model license and deployment terms before using generated audio outside local experiments.
 
 ## Input Format
 
@@ -343,7 +359,7 @@ Use this file to compare whether pipeline changes improve curation quality over 
 
 - `ffmpeg is required`: install `ffmpeg` and make sure it is on `PATH`.
 - `Install faster-whisper`: transcription is optional; run scoring without `--transcribe` or install the package.
-- `Install coqui-tts/TTS`: XTTS-v2 is isolated behind the adapter and only needed for real XTTS synthesis.
+- `XTTS requires a separate Python environment`: run `bash scripts/setup_xtts_env.sh` or set `XTTS_PYTHON`.
 - `OpenVoice V2 ... checkpoints`: OpenVoice requires a separate repository/checkpoint setup; the adapter boundary is present but checkpoint-specific wiring must be configured.
 - `synthesis requires --consent-confirmed`: confirm explicit target-speaker consent and rerun with the required flag.
 - `accepted_count` is unexpectedly `0`: check `voice_feedback.csv` reject reasons. If `low_speech_ratio` dominates, confirm Silero VAD is installed and that the clips are readable WAV files. If `overlaps_other_speaker` dominates, try disabling overlap rejection for diagnosis, but keep it enabled for high-quality reference packs.
