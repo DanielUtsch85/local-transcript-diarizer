@@ -1,0 +1,27 @@
+[project]
+name = "local-transcript-diarizer"
+version = "0.1.0"
+description = "Local MP3 transcription with speaker labels and DOCX export."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "altair>=5",
+  "diarize>=0.1.1",
+  "pandas>=1.4",
+  "psutil>=5.9",
+  "python-docx>=1.1.2",
+  "streamlit>=1.35",
+  "whisperx>=3.3.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
