@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .audio_io import read_wav_mono
+from .segment_loader import DiarizationSegment
 from .vad import speech_ratio
 
 
@@ -23,6 +24,8 @@ def score_segment(
     transcript: str | None = None,
     language: str | None = None,
     transcript_confidence: float | None = None,
+    overlap_sec: float = 0.0,
+    overlap_speakers: list[str] | None = None,
 ) -> dict[str, Any]:
     cfg = quality_config or {}
     try:
@@ -52,7 +55,11 @@ def score_segment(
             "transcript": transcript,
             "language": language,
             "transcript_confidence": transcript_confidence,
+            "overlap_sec": round(max(0.0, overlap_sec), 3),
+            "overlap_ratio": 0.0,
+            "overlap_speakers": sorted(set(overlap_speakers or [])),
         }
+        row["overlap_ratio"] = round(row["overlap_sec"] / duration_sec, 6) if duration_sec else 0.0
     except Exception as exc:
         return {
             "file": str(path),
@@ -78,7 +85,24 @@ def score_segment(
         reasons.append("too_much_clipping")
     if cfg.get("reject_empty_transcript", True) and transcript is not None and not transcript.strip():
         reasons.append("empty_transcript")
+    if row["overlap_sec"] > float(cfg.get("max_overlap_sec", 0.0)):
+        reasons.append("overlaps_other_speaker")
 
     row["accepted"] = not reasons
     row["reject_reasons"] = sorted(set(reasons))
     return row
+
+
+def segment_overlap(segment: DiarizationSegment, all_segments: list[DiarizationSegment]) -> dict[str, Any]:
+    total = 0.0
+    speakers: set[str] = set()
+    for other in all_segments:
+        if other.speaker == segment.speaker:
+            continue
+        if other.source_file != segment.source_file:
+            continue
+        overlap = min(segment.end, other.end) - max(segment.start, other.start)
+        if overlap > 0:
+            total += overlap
+            speakers.add(other.speaker)
+    return {"overlap_sec": round(total, 3), "overlap_speakers": sorted(speakers)}

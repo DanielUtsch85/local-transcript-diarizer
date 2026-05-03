@@ -13,6 +13,7 @@ quality:
   min_rms_db: -35
   max_peak_db: -0.5
   reject_empty_transcript: true
+  max_overlap_sec: 0.0
 reference_pack:
   target_total_sec: 60
   preferred_min_duration_sec: 4

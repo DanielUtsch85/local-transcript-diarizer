@@ -18,6 +18,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_rms_db": -35,
         "max_peak_db": -0.5,
         "reject_empty_transcript": True,
+        "max_overlap_sec": 0.0,
     },
     "reference_pack": {
         "target_total_sec": 60,
