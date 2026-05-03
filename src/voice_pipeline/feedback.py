@@ -19,6 +19,7 @@ def build_voice_feedback_csv(
     rejected_rows: list[dict[str, Any]],
     reference_metadata: dict[str, Any] | None = None,
     synthesis_metadata: dict[str, Any] | None = None,
+    synthesis_error: str | None = None,
 ) -> str:
     buffer = StringIO()
     writer = csv.writer(buffer)
@@ -62,6 +63,8 @@ def build_voice_feedback_csv(
         add("synthesis", "backend", synthesis_metadata.get("backend", ""))
         add("synthesis", "synthetic", synthesis_metadata.get("synthetic", ""))
         add("synthesis", "output_file", synthesis_metadata.get("output_file", ""))
+    if synthesis_error:
+        add("synthesis", "error", synthesis_error)
     return buffer.getvalue()
 
 

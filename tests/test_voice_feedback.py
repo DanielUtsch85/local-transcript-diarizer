@@ -18,6 +18,7 @@ def test_voice_feedback_csv_contains_quality_metrics(tmp_path):
         accepted_rows=[{"duration_sec": 3.0, "accepted": True}],
         rejected_rows=[{"duration_sec": 4.0, "accepted": False, "reject_reasons": ["overlaps_other_speaker"]}],
         reference_metadata={"refs": [{"file": "ref_001.wav"}], "target_total_sec": 60, "actual_total_sec": 3.0},
+        synthesis_error="Install coqui-tts/TTS to use the XTTS backend",
     )
 
     rows = list(csv.DictReader(StringIO(csv_text)))
@@ -29,3 +30,4 @@ def test_voice_feedback_csv_contains_quality_metrics(tmp_path):
     assert metrics[("overlap", "rejected_for_overlap")] == "1"
     assert metrics[("reject_reason", "overlaps_other_speaker")] == "1"
     assert metrics[("reference_pack", "ref_count")] == "1"
+    assert metrics[("synthesis", "error")] == "Install coqui-tts/TTS to use the XTTS backend"

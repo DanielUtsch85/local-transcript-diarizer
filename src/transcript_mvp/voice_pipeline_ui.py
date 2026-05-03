@@ -49,6 +49,8 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         speaker = st.selectbox("Zielsprecher", speakers)
         language = st.selectbox("Sprache", ["de", "en"], index=0)
         backend = st.selectbox("Synthese-Backend", ["mock", "xtts", "openvoice"], index=0)
+        if backend != "mock":
+            st.caption(_backend_hint(backend))
         text = st.text_area("Synthese-Text", value="Hallo, dies ist ein synthetisch erzeugter Testsatz.")
         consent_confirmed = st.checkbox("Explizite Einwilligung des Zielsprechers liegt vor")
         run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)
@@ -228,14 +230,21 @@ def _run_pipeline_from_ui(
         reference = build_reference_pack(clean_dir, manifests_dir / "accepted.jsonl", output_dir / "voice_refs", target_total_sec=target_total_sec)
 
         synth_metadata = None
+        synthesis_error = None
         if run_synthesis:
             st.write("Synthetisches Sample wird erzeugt und geloggt.")
             validate_consent(consent_confirmed)
             output_wav = output_dir / "generated_samples" / f"sample_{backend}_001.wav"
             reference_files = sorted((output_dir / "voice_refs").glob("ref_*.wav"))
-            result = _backend(backend).synthesize(text, reference_files, output_wav, language=language)
-            synth_metadata = synthesis_metadata(speaker, backend, text, language, reference_files, result, consent_confirmed)
-            write_synthesis_log(manifests_dir / "synthesis_runs.jsonl", synth_metadata, result)
+            if not reference_files:
+                synthesis_error = "Keine Reference-Clips vorhanden; Synthese wurde nicht gestartet."
+            else:
+                try:
+                    result = _backend(backend).synthesize(text, reference_files, output_wav, language=language)
+                    synth_metadata = synthesis_metadata(speaker, backend, text, language, reference_files, result, consent_confirmed)
+                    write_synthesis_log(manifests_dir / "synthesis_runs.jsonl", synth_metadata, result)
+                except (RuntimeError, NotImplementedError, ValueError) as exc:
+                    synthesis_error = str(exc)
 
         feedback_csv = build_voice_feedback_csv(
             speaker=speaker,
@@ -257,14 +266,22 @@ def _run_pipeline_from_ui(
             rejected_rows=rejected,
             reference_metadata=reference,
             synthesis_metadata=synth_metadata,
+            synthesis_error=synthesis_error,
         )
         (manifests_dir / "voice_feedback.csv").write_text(feedback_csv, encoding="utf-8")
 
-        status.update(label="Voice-Pipeline fertig", state="complete")
-        st.success(
+        message = (
             f"Fertig: {len(extracted)} roh, {len(accepted)} akzeptiert, {len(rejected)} abgelehnt, "
             f"{len(reference.get('refs', []))} Referenzen."
         )
+        if synthesis_error:
+            status.update(label="Reference-Pack fertig, Synthese fehlgeschlagen", state="error")
+            st.warning(message)
+            st.error(f"Synthese fehlgeschlagen: {synthesis_error}")
+            st.info(_backend_hint(backend))
+        else:
+            status.update(label="Voice-Pipeline fertig", state="complete")
+            st.success(message)
 
 
 def _rewrite_diarization_source(input_path: Path, prepared_audio: Path, output_path: Path) -> Path:
@@ -341,6 +358,23 @@ def _render_existing_outputs(output_dir: Path) -> None:
             file_name=f"{output_dir.name}-voice-feedback.csv",
             mime="text/csv",
         )
+    generated = sorted((output_dir / "generated_samples").glob("*.wav"))
+    if generated:
+        st.subheader("Generierte Samples")
+        for wav in generated:
+            st.markdown(f"**{wav.name}**")
+            st.audio(wav.read_bytes(), format="audio/wav")
+            st.download_button(
+                "WAV herunterladen",
+                data=wav.read_bytes(),
+                file_name=wav.name,
+                mime="audio/wav",
+                key=f"download-{wav}",
+            )
+            sidecar = wav.with_suffix(wav.suffix + ".synthetic.json")
+            if sidecar.exists():
+                with st.expander(f"Metadaten: {sidecar.name}"):
+                    st.json(json.loads(sidecar.read_text(encoding="utf-8")))
     report = output_dir / "report.md"
     if report.exists():
         with st.expander("Report"):
@@ -355,6 +389,14 @@ def _backend(name: str):
     if name == "openvoice":
         return OpenVoiceBackend()
     raise ValueError(f"Unsupported backend: {name}")
+
+
+def _backend_hint(name: str) -> str:
+    if name == "xtts":
+        return "XTTS benoetigt die optionale Coqui-TTS/TTS Installation und kann Modell-Downloads ausloesen."
+    if name == "openvoice":
+        return "OpenVoice benoetigt eine separate OpenVoice-V2 Installation plus konfigurierte Checkpoints."
+    return "Mock erzeugt nur ein Test-WAV und benoetigt keine Modellinstallation."
 
 
 def _safe_filename(name: str) -> str:
