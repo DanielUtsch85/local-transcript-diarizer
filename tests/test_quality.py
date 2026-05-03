@@ -5,6 +5,7 @@ import numpy as np
 from voice_pipeline.audio_io import create_dummy_wav
 from voice_pipeline.quality import score_segment, segment_overlap
 from voice_pipeline.segment_loader import DiarizationSegment
+from voice_pipeline.vad import _resample_linear
 
 
 def _write_wav(path, samples, sample_rate=24000):
@@ -81,3 +82,12 @@ def test_segment_overlap_ignores_same_speaker_and_different_file(tmp_path):
     overlap = segment_overlap(segment, all_segments)
 
     assert overlap == {"overlap_sec": 0.5, "overlap_speakers": ["SPEAKER_01"]}
+
+
+def test_vad_resampler_maps_24khz_to_16khz_length():
+    samples = np.linspace(-1.0, 1.0, 24000, dtype=np.float32)
+
+    resampled = _resample_linear(samples, 24000, 16000)
+
+    assert resampled.shape == (16000,)
+    assert resampled.dtype == np.float32
