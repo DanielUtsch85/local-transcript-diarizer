@@ -1,0 +1,26 @@
+audio:
+  sample_rate: 24000
+  mono: true
+  padding_ms: 100
+segments:
+  min_duration_sec: 2.0
+  max_duration_sec: 15.0
+quality:
+  min_duration_sec: 2.0
+  max_duration_sec: 15.0
+  min_speech_ratio: 0.75
+  max_clipping_ratio: 0.001
+  min_rms_db: -35
+  max_peak_db: -0.5
+  reject_empty_transcript: true
+reference_pack:
+  target_total_sec: 60
+  preferred_min_duration_sec: 4
+  preferred_max_duration_sec: 12
+transcription:
+  backend: faster-whisper
+  model: medium
+  language: de
+synthesis:
+  default_backend: xtts
+  require_consent: true

@@ -10,7 +10,7 @@ SRC_ROOT = APP_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from transcript_mvp.exports import build_docx, build_html
+from transcript_mvp.exports import build_diarization_json, build_diarization_jsonl, build_docx, build_html
 from transcript_mvp.estimates import estimate_processing_seconds
 from transcript_mvp.feedback import build_feedback_csv
 from transcript_mvp.kpis import quality_notes, resource_kpis, transcript_kpis
@@ -27,6 +27,7 @@ from transcript_mvp.pipeline import (
     run_whisperx,
 )
 from transcript_mvp.resources import collect_resource_snapshot
+from transcript_mvp.voice_pipeline_ui import render_voice_pipeline_page
 
 DATA_DIR = APP_ROOT / "data"
 
@@ -182,6 +183,16 @@ st.set_page_config(page_title="Lokale Transkription", layout="wide")
 st.title("Lokale Transkription")
 st.caption("MP3 rein, Sprecherlabels pruefen, Word-Datei raus.")
 
+page = st.sidebar.radio(
+    "Bereich",
+    ["Transkription", "Voice-Pipeline"],
+    key="active_page",
+)
+
+if page == "Voice-Pipeline":
+    render_voice_pipeline_page(DATA_DIR)
+    st.stop()
+
 with st.sidebar:
     st.header("Einstellungen")
     memory_mode = st.toggle(
@@ -252,6 +263,8 @@ with left:
 
             run_dir = create_run_dir(DATA_DIR / "runs", st.session_state.source_name)
             audio_path = save_upload(uploaded, DATA_DIR / "uploads")
+            st.session_state.last_audio_path = str(audio_path)
+            st.session_state.last_run_dir = str(run_dir)
             audio_duration = get_audio_duration(audio_path)
             estimate = estimate_processing_seconds(
                 audio_seconds=audio_duration,
@@ -487,6 +500,27 @@ with right:
                 file_name=st.session_state.feedback_filename,
                 mime="text/csv",
             )
+        last_audio_path = st.session_state.get("last_audio_path")
+        if last_audio_path:
+            diarization_json = build_diarization_json(st.session_state.segments, last_audio_path)
+            diarization_jsonl = build_diarization_jsonl(st.session_state.segments, last_audio_path)
+            st.download_button(
+                "Diarization JSON herunterladen",
+                data=diarization_json.encode("utf-8"),
+                file_name=f"{st.session_state.source_name}-diarization.json",
+                mime="application/json",
+            )
+            st.download_button(
+                "Diarization JSONL herunterladen",
+                data=diarization_jsonl.encode("utf-8"),
+                file_name=f"{st.session_state.source_name}-diarization.jsonl",
+                mime="application/x-ndjson",
+            )
+        else:
+            st.caption("Diarization-Export erscheint, sobald die zugehoerige Audio-Datei in dieser Sitzung bekannt ist.")
+        if st.button("Voice-Pipeline oeffnen"):
+            st.session_state.active_page = "Voice-Pipeline"
+            st.rerun()
 
 if st.session_state.segments:
     st.divider()

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from io import BytesIO
+from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_BREAK
@@ -59,3 +61,27 @@ def build_html(segments: list[TranscriptSegment], mapping: SpeakerMapping, title
 </body>
 </html>
 """
+
+
+def build_diarization_json(segments: list[TranscriptSegment], source_file: str | Path) -> str:
+    rows = _diarization_rows(segments, source_file)
+    return json.dumps(rows, ensure_ascii=False, indent=2) + "\n"
+
+
+def build_diarization_jsonl(segments: list[TranscriptSegment], source_file: str | Path) -> str:
+    rows = _diarization_rows(segments, source_file)
+    return "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
+
+
+def _diarization_rows(segments: list[TranscriptSegment], source_file: str | Path) -> list[dict]:
+    source = str(source_file)
+    return [
+        {
+            "speaker": segment.speaker,
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "source_file": source,
+        }
+        for segment in segments
+        if segment.start is not None and segment.end is not None and segment.end > segment.start
+    ]
