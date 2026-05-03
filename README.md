@@ -6,7 +6,7 @@ A local macOS-first app for transcribing audio files, detecting speakers locally
 
 - Transcription: WhisperX / faster-whisper
 - Speaker diarization: local `diarize`, no account required
-- Voice activity detection: Silero VAD
+- Voice activity detection: pyannote VAD by default; Silero is optional when cached locally
 - Export: DOCX und HTML
 - No OpenAI API, no cloud transcription API
 
@@ -65,6 +65,7 @@ For longer recordings on macOS, start with:
 - Batch size: `1`
 - Chunk size: `20`
 - Word alignment: on for more readable segmentation
+- VAD method: `pyannote` for stable offline runs in this app
 - Speaker detection: only enable it when speaker labels are needed
 
 `small` is useful for quick checks, `medium` is currently the best default tradeoff, and `large-v3` is intended for final higher-quality runs. `tiny` and `base` are intentionally not part of the normal UI because early tests produced weak results for interview material.

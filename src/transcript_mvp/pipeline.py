@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import subprocess
@@ -38,6 +39,7 @@ def run_whisperx(
     chunk_size: int,
     threads: int,
     no_align: bool,
+    vad_method: str,
     on_output: Callable[[str], None] | None = None,
     on_tick: Callable[[float, int], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -54,6 +56,7 @@ def run_whisperx(
         chunk_size=chunk_size,
         threads=threads,
         no_align=no_align,
+        vad_method=vad_method,
     )
 
     started_at = time.monotonic()
@@ -61,12 +64,15 @@ def run_whisperx(
     line_queue: queue.Queue[str] = queue.Queue()
 
     try:
+        env = os.environ.copy()
+        env["PYTHONWARNINGS"] = "ignore"
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
@@ -128,6 +134,7 @@ def build_whisperx_command(
     chunk_size: int,
     threads: int,
     no_align: bool,
+    vad_method: str,
 ) -> list[str]:
     cmd = [
         "whisperx",
@@ -145,7 +152,7 @@ def build_whisperx_command(
         "--threads",
         str(threads),
         "--vad_method",
-        "silero",
+        vad_method,
         "--print_progress",
         "True",
         "--output_format",
@@ -191,6 +198,14 @@ def parse_whisperx_progress(line: str) -> float | None:
 
 
 def format_whisperx_error(details: str) -> str:
+    if is_silero_download_error(details):
+        return (
+            "WhisperX konnte die Datei nicht verarbeiten.\n\n"
+            "Silero VAD ist nicht lokal zwischengespeichert und konnte wegen GitHub-Rate-Limit "
+            "nicht heruntergeladen werden. Bitte VAD-Methode `pyannote` nutzen oder Silero einmalig "
+            "mit Internetzugang vorladen.\n\n"
+            f"{details}"
+        )
     if is_missing_model_cache_error(details):
         return (
             "WhisperX konnte die Datei nicht verarbeiten.\n\n"
@@ -208,6 +223,16 @@ def is_missing_model_cache_error(details: str) -> bool:
         "Failed to resolve 'huggingface.co'",
         "cannot find the appropriate snapshot folder",
         "trying to locate the files on the Hub",
+    ]
+    return any(marker in details for marker in markers)
+
+
+def is_silero_download_error(details: str) -> bool:
+    markers = [
+        "snakers4/silero-vad",
+        "torch.hub.load",
+        "HTTP Error 403: rate limit exceeded",
+        "rate limit exceeded",
     ]
     return any(marker in details for marker in markers)
 

@@ -212,6 +212,12 @@ with st.sidebar:
             chunk_size = st.number_input("Chunk-Groesse Sekunden", min_value=5, max_value=60, value=30)
             no_align = st.toggle("Wortgenaue Ausrichtung sparen", value=False)
             threads = st.number_input("CPU-Threads", min_value=0, max_value=16, value=0)
+        vad_method = st.selectbox(
+            "Spracherkennung vor Transkription",
+            ["pyannote", "silero"],
+            index=0,
+            help="pyannote laeuft bei dir stabil lokal. Silero kann GitHub-Zugriff brauchen, falls es nicht im Cache ist.",
+        )
     with st.expander("Feedback-CSV"):
         include_feedback_text_samples = st.toggle(
             "Kurze Textbeispiele aufnehmen",
@@ -256,6 +262,7 @@ with left:
                 batch_size=batch_size,
                 chunk_size=chunk_size,
                 threads=threads,
+                vad_method=vad_method,
                 history_dir=DATA_DIR / "runs",
             )
             estimated_seconds = estimate.seconds
@@ -366,6 +373,7 @@ with left:
                         chunk_size=chunk_size,
                         threads=threads,
                         no_align=no_align,
+                        vad_method=vad_method,
                         on_output=append_log,
                         on_tick=update_elapsed,
                         on_progress=update_transcription_progress,
@@ -416,6 +424,7 @@ with left:
                         "chunk_size": chunk_size,
                         "no_align": no_align,
                         "threads": threads,
+                        "vad_method": vad_method,
                     },
                     audio_duration_seconds=audio_duration,
                     processing_seconds=processing_seconds,

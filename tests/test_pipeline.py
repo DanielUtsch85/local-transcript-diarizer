@@ -13,6 +13,7 @@ from transcript_mvp.pipeline import (
     build_whisperx_command,
     extract_speakers,
     is_missing_model_cache_error,
+    is_silero_download_error,
     parse_whisperx_progress,
     render_segments,
     transcript_from_stdout,
@@ -74,6 +75,7 @@ class PipelineTests(unittest.TestCase):
             chunk_size=10,
             threads=4,
             no_align=True,
+            vad_method="pyannote",
         )
 
         self.assertIn("--batch_size", command)
@@ -82,7 +84,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("10", command)
         self.assertIn("--no_align", command)
         self.assertIn("--vad_method", command)
-        self.assertIn("silero", command)
+        self.assertIn("pyannote", command)
         self.assertIn("--print_progress", command)
         self.assertNotIn("--diarize", command)
 
@@ -108,6 +110,11 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(is_missing_model_cache_error("LocalEntryNotFoundError"))
         self.assertTrue(is_missing_model_cache_error("Failed to resolve 'huggingface.co'"))
         self.assertFalse(is_missing_model_cache_error("unrelated"))
+
+    def test_detects_silero_download_error(self):
+        self.assertTrue(is_silero_download_error("torch.hub.load repo_or_dir='snakers4/silero-vad'"))
+        self.assertTrue(is_silero_download_error("HTTP Error 403: rate limit exceeded"))
+        self.assertFalse(is_silero_download_error("unrelated"))
 
     def test_assign_speakers_by_overlap(self):
         transcript_segments = [
@@ -203,6 +210,7 @@ class PipelineTests(unittest.TestCase):
                         "settings,batch_size,1,,",
                         "settings,chunk_size,10,,",
                         "settings,threads,4,,",
+                        "settings,vad_method,pyannote,,",
                     ]
                 ),
                 encoding="utf-8",
@@ -217,6 +225,7 @@ class PipelineTests(unittest.TestCase):
                 batch_size=1,
                 chunk_size=10,
                 threads=4,
+                vad_method="pyannote",
                 history_dir=Path(directory),
             )
 

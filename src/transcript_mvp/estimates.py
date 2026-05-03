@@ -24,6 +24,7 @@ def estimate_processing_seconds(
     batch_size: int | None = None,
     chunk_size: int | None = None,
     threads: int | None = None,
+    vad_method: str | None = None,
     history_dir: Path,
 ) -> ProcessingEstimate:
     if audio_seconds is None:
@@ -40,6 +41,7 @@ def estimate_processing_seconds(
         and _matches_optional(run, "batch_size", batch_size)
         and _matches_optional(run, "chunk_size", chunk_size)
         and _matches_optional(run, "threads", threads)
+        and _matches_optional_text(run, "vad_method", vad_method)
     ]
     aligned = [
         run
@@ -153,3 +155,9 @@ def _matches_optional(run: dict[str, str], key: str, value: int | None) -> bool:
     if value is None:
         return True
     return run.get(key) == str(value)
+
+
+def _matches_optional_text(run: dict[str, str], key: str, value: str | None) -> bool:
+    if value is None:
+        return True
+    return run.get(key, value) == value
