@@ -6,6 +6,7 @@ A local macOS-first app for transcribing audio files, detecting speakers locally
 
 - Transcription: WhisperX / faster-whisper
 - Speaker diarization: local `diarize`, no account required
+- Voice activity detection: Silero VAD
 - Export: DOCX und HTML
 - No OpenAI API, no cloud transcription API
 

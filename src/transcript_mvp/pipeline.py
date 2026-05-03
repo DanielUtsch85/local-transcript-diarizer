@@ -144,6 +144,8 @@ def build_whisperx_command(
         str(chunk_size),
         "--threads",
         str(threads),
+        "--vad_method",
+        "silero",
         "--print_progress",
         "True",
         "--output_format",

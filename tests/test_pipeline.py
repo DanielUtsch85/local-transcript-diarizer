@@ -81,6 +81,8 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("--chunk_size", command)
         self.assertIn("10", command)
         self.assertIn("--no_align", command)
+        self.assertIn("--vad_method", command)
+        self.assertIn("silero", command)
         self.assertIn("--print_progress", command)
         self.assertNotIn("--diarize", command)
 
