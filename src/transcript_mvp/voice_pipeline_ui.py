@@ -5,6 +5,7 @@ import os
 import signal
 import shutil
 import time
+from html import escape
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
@@ -483,7 +484,7 @@ def _render_pipeline_stepper(
         skipped_indices = set(skipped_indices) | {5}
     overall_label = _elapsed(overall_started_at) if overall_started_at is not None else "bereit"
     step_label = _elapsed(step_started_at) if step_started_at is not None else "noch nicht gestartet"
-    items = []
+    items: list[str] = []
     for index, (title, detail) in enumerate(_PIPELINE_STEPS):
         if index in skipped_indices:
             state = "skipped"
@@ -510,180 +511,54 @@ def _render_pipeline_stepper(
         elif state == "pending":
             timing = "ausstehend"
         items.append(
-            f"""
-            <div class="vp-process-item">
-              <div class="vp-process-card vp-step-{state}">
-                <div class="vp-step-index">{index + 1}</div>
-                <div class="vp-step-copy">
-                  <div class="vp-step-title">{title}</div>
-                  <div class="vp-step-detail">{detail}</div>
-                  <div class="vp-step-meta">
-                    <span>{state_label}</span>
-                    <span>{timing}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            """
+            '<div class="vp-process-item">'
+            f'<div class="vp-process-card vp-step-{state}">'
+            f'<div class="vp-step-index">{index + 1}</div>'
+            '<div class="vp-step-copy">'
+            f'<div class="vp-step-title">{escape(title)}</div>'
+            f'<div class="vp-step-detail">{escape(detail)}</div>'
+            '<div class="vp-step-meta">'
+            f'<span>{escape(state_label)}</span>'
+            f'<span>{escape(timing)}</span>'
+            "</div>"
+            "</div>"
+            "</div>"
+            "</div>"
         )
-    container.markdown(
-        f"""
-        <style>
-          .vp-process-shell {{
-            border: 1px solid #dbe3ee;
-            border-radius: 8px;
-            padding: 14px;
-            margin: 14px 0 16px;
-            background: #ffffff;
-          }}
-          .vp-process-head {{
-            display: flex;
-            align-items: baseline;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 14px;
-          }}
-          .vp-process-title {{
-            color: #0f172a;
-            font-size: 15px;
-            font-weight: 700;
-          }}
-          .vp-process-time {{
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            color: #475569;
-            font-size: 12px;
-          }}
-          .vp-process-time span {{
-            border: 1px solid #e2e8f0;
-            border-radius: 999px;
-            padding: 4px 9px;
-            background: #f8fafc;
-          }}
-          .vp-stepper {{
-            display: grid;
-            grid-template-columns: repeat(6, minmax(0, 1fr));
-            gap: 0;
-            align-items: stretch;
-            margin: 0;
-          }}
-          .vp-process-item {{
-            position: relative;
-            padding: 0 6px;
-          }}
-          .vp-process-item:not(:last-child)::after {{
-            content: "";
-            position: absolute;
-            top: 23px;
-            right: -10px;
-            width: 20px;
-            height: 2px;
-            background: #cbd5e1;
-            z-index: 1;
-          }}
-          .vp-process-card {{
-            position: relative;
-            z-index: 2;
-            border: 1px solid #d7dde7;
-            border-radius: 8px;
-            padding: 10px;
-            min-height: 128px;
-            background: #f8fafc;
-          }}
-          .vp-step-index {{
-            width: 28px;
-            height: 28px;
-            border-radius: 999px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            margin-bottom: 8px;
-            color: #475569;
-            background: #e2e8f0;
-          }}
-          .vp-step-title {{
-            font-weight: 700;
-            color: #0f172a;
-            line-height: 1.2;
-          }}
-          .vp-step-detail {{
-            color: #64748b;
-            font-size: 12px;
-            line-height: 1.25;
-            margin-top: 4px;
-          }}
-          .vp-step-meta {{
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            color: #475569;
-            font-size: 11px;
-            font-weight: 700;
-            margin-top: 8px;
-            text-transform: uppercase;
-          }}
-          .vp-step-done {{
-            border-color: #9bd4b5;
-            background: #f1fbf5;
-          }}
-          .vp-step-done .vp-step-index {{
-            color: #065f46;
-            background: #bbf7d0;
-          }}
-          .vp-step-active {{
-            border-color: #60a5fa;
-            background: #eff6ff;
-            box-shadow: inset 0 0 0 1px #bfdbfe;
-          }}
-          .vp-step-active .vp-step-index {{
-            color: #ffffff;
-            background: #2563eb;
-          }}
-          .vp-step-failed {{
-            border-color: #fca5a5;
-            background: #fff1f2;
-          }}
-          .vp-step-failed .vp-step-index {{
-            color: #ffffff;
-            background: #dc2626;
-          }}
-          .vp-step-skipped {{
-            border-color: #e2e8f0;
-            background: #f8fafc;
-          }}
-          .vp-step-skipped .vp-step-index {{
-            color: #64748b;
-            background: #e2e8f0;
-          }}
-          @media (max-width: 900px) {{
-            .vp-stepper {{
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-              gap: 8px;
-            }}
-            .vp-process-item:not(:last-child)::after {{
-              display: none;
-            }}
-            .vp-process-head {{
-              align-items: flex-start;
-              flex-direction: column;
-            }}
-          }}
-        </style>
-        <div class="vp-process-shell">
-          <div class="vp-process-head">
-            <div class="vp-process-title">Voice-Pipeline Prozess</div>
-            <div class="vp-process-time">
-              <span>Gesamtzeit {overall_label}</span>
-              <span>Aktueller Schritt {step_label}</span>
-            </div>
-          </div>
-          <div class="vp-stepper">{''.join(items)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    style = (
+        "<style>"
+        ".vp-process-shell{border:1px solid #dbe3ee;border-radius:8px;padding:14px;margin:14px 0 16px;background:#fff;}"
+        ".vp-process-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;}"
+        ".vp-process-title{color:#0f172a;font-size:15px;font-weight:700;}"
+        ".vp-process-time{display:flex;gap:10px;flex-wrap:wrap;color:#475569;font-size:12px;}"
+        ".vp-process-time span{border:1px solid #e2e8f0;border-radius:999px;padding:4px 9px;background:#f8fafc;}"
+        ".vp-stepper{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;align-items:stretch;margin:0;}"
+        ".vp-process-item{position:relative;padding:0 6px;}"
+        ".vp-process-item:not(:last-child)::after{content:'';position:absolute;top:23px;right:-10px;width:20px;height:2px;background:#cbd5e1;z-index:1;}"
+        ".vp-process-card{position:relative;z-index:2;border:1px solid #d7dde7;border-radius:8px;padding:10px;min-height:128px;background:#f8fafc;}"
+        ".vp-step-index{width:28px;height:28px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:700;margin-bottom:8px;color:#475569;background:#e2e8f0;}"
+        ".vp-step-title{font-weight:700;color:#0f172a;line-height:1.2;}"
+        ".vp-step-detail{color:#64748b;font-size:12px;line-height:1.25;margin-top:4px;}"
+        ".vp-step-meta{display:flex;flex-direction:column;gap:2px;color:#475569;font-size:11px;font-weight:700;margin-top:8px;text-transform:uppercase;}"
+        ".vp-step-done{border-color:#9bd4b5;background:#f1fbf5;}"
+        ".vp-step-done .vp-step-index{color:#065f46;background:#bbf7d0;}"
+        ".vp-step-active{border-color:#60a5fa;background:#eff6ff;box-shadow:inset 0 0 0 1px #bfdbfe;}"
+        ".vp-step-active .vp-step-index{color:#fff;background:#2563eb;}"
+        ".vp-step-failed{border-color:#fca5a5;background:#fff1f2;}"
+        ".vp-step-failed .vp-step-index{color:#fff;background:#dc2626;}"
+        ".vp-step-skipped{border-color:#e2e8f0;background:#f8fafc;}"
+        ".vp-step-skipped .vp-step-index{color:#64748b;background:#e2e8f0;}"
+        "@media (max-width:900px){.vp-stepper{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.vp-process-item:not(:last-child)::after{display:none;}.vp-process-head{align-items:flex-start;flex-direction:column;}}"
+        "</style>"
     )
+    html = (
+        f"{style}<div class=\"vp-process-shell\"><div class=\"vp-process-head\">"
+        "<div class=\"vp-process-title\">Voice-Pipeline Prozess</div>"
+        f"<div class=\"vp-process-time\"><span>Gesamtzeit {escape(overall_label)}</span>"
+        f"<span>Aktueller Schritt {escape(step_label)}</span></div></div>"
+        f"<div class=\"vp-stepper\">{''.join(items)}</div></div>"
+    )
+    container.markdown(html, unsafe_allow_html=True)
 
 
 def _render_feedback_download(feedback_csv: str, *, file_name: str, label: str) -> None:
@@ -760,34 +635,39 @@ def _render_existing_outputs(output_dir: Path) -> None:
     cols[2].metric("Ref-Clips", len(list((output_dir / "voice_refs").glob("ref_*.wav"))))
     cols[3].metric("Samples", len(list((output_dir / "generated_samples").glob("*.wav"))))
 
-    if accepted:
-        st.dataframe(pd.DataFrame(accepted), use_container_width=True)
     feedback = manifests / "voice_feedback.csv"
+    action_cols = st.columns([1, 1, 2])
     if feedback.exists():
-        st.download_button(
-            "Voice-Feedback-CSV herunterladen",
+        action_cols[0].download_button(
+            "Voice-Feedback-CSV",
             data=feedback.read_bytes(),
             file_name=f"{output_dir.name}-voice-feedback.csv",
             mime="text/csv",
         )
+    if accepted:
+        with st.expander("Akzeptierte Segmente anzeigen"):
+            st.dataframe(pd.DataFrame(accepted), use_container_width=True, height=320)
     generated = sorted((output_dir / "generated_samples").glob("*.wav"))
     if generated:
         st.subheader("Generierte Samples")
         for wav in generated:
-            st.markdown(f"**{wav.name}**")
-            st.audio(wav.read_bytes(), format="audio/wav")
-            st.download_button(
-                "WAV herunterladen",
-                data=wav.read_bytes(),
-                file_name=wav.name,
-                mime="audio/wav",
-                key=f"download-{wav}",
-            )
-            sidecar = wav.with_suffix(wav.suffix + ".synthetic.json")
-            if sidecar.exists():
-                with st.expander(f"Metadaten: {sidecar.name}"):
-                    st.json(json.loads(sidecar.read_text(encoding="utf-8")))
-            _render_synthesis_review(output_dir, wav, feedback)
+            with st.container(border=True):
+                st.markdown(f"**{wav.name}**")
+                st.audio(wav.read_bytes(), format="audio/wav")
+                sample_cols = st.columns([1, 1, 3])
+                sample_cols[0].download_button(
+                    "WAV herunterladen",
+                    data=wav.read_bytes(),
+                    file_name=wav.name,
+                    mime="audio/wav",
+                    key=f"download-{wav}",
+                )
+                with sample_cols[1]:
+                    _render_synthesis_review(output_dir, wav, feedback)
+                sidecar = wav.with_suffix(wav.suffix + ".synthetic.json")
+                if sidecar.exists():
+                    with st.expander(f"Metadaten: {sidecar.name}"):
+                        st.json(json.loads(sidecar.read_text(encoding="utf-8")))
     report = output_dir / "report.md"
     if report.exists():
         with st.expander("Report"):
