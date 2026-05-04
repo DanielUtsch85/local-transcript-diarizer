@@ -880,15 +880,45 @@ def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_pat
 @st.dialog("Stimme qualitativ bewerten")
 def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedback_path: Path, dialog_key: str) -> None:
     st.audio(wav.read_bytes(), format="audio/wav")
+    st.markdown(
+        "**Bewertungsskala**  \n"
+        "*1 = schwach oder problematisch, 3 = brauchbar mit sichtbaren Grenzen, 5 = sehr gut. "
+        "Bei Artefakten bedeutet 1 kaum Stoerungen und 5 stark stoerende Artefakte.*"
+    )
     cols = st.columns(2)
     with cols[0]:
-        overall_quality = st.slider("Gesamtqualitaet", 1, 5, 3, key=f"{wav}-overall-quality")
-        voice_similarity = st.slider("Stimm-Aehnlichkeit", 1, 5, 3, key=f"{wav}-voice-similarity")
-        speaker_recognition = st.slider("Treffergenauigkeit Zielsprecher", 1, 5, 3, key=f"{wav}-speaker-recognition")
+        overall_quality = _review_slider(
+            "Gesamtqualitaet",
+            "Gesamteindruck aus Klang, Stabilitaet, Verstaendlichkeit und Nutzbarkeit. 1 = nicht brauchbar, 5 = ohne groessere Einschraenkung nutzbar.",
+            key=f"{wav}-overall-quality",
+        )
+        voice_similarity = _review_slider(
+            "Stimm-Aehnlichkeit",
+            "Wie nah Klangfarbe, Alterseindruck, Sprechlage und Timbre an der Zielstimme liegen. 1 = andere Stimme, 5 = sehr nah an der Referenz.",
+            key=f"{wav}-voice-similarity",
+        )
+        speaker_recognition = _review_slider(
+            "Treffergenauigkeit Zielsprecher",
+            "Ob die synthetische Stimme eindeutig dem gewuenschten Sprecher zugeordnet werden kann. 1 = Zielsprecher kaum erkennbar, 5 = klar erkennbar.",
+            key=f"{wav}-speaker-recognition",
+        )
     with cols[1]:
-        intelligibility = st.slider("Verstaendlichkeit", 1, 5, 3, key=f"{wav}-intelligibility")
-        naturalness = st.slider("Natuerlichkeit", 1, 5, 3, key=f"{wav}-naturalness")
-        artifact_level = st.slider("Artefakte/Stoerungen", 1, 5, 3, key=f"{wav}-artifact-level")
+        intelligibility = _review_slider(
+            "Verstaendlichkeit",
+            "Wie gut Woerter, Satzmelodie und Aussprache verstanden werden. 1 = schwer verstaendlich, 5 = klar und sauber.",
+            key=f"{wav}-intelligibility",
+        )
+        naturalness = _review_slider(
+            "Natuerlichkeit",
+            "Wie menschlich und fluessig die Stimme wirkt, inklusive Rhythmus, Betonung und Pausen. 1 = deutlich kuenstlich, 5 = sehr natuerlich.",
+            key=f"{wav}-naturalness",
+        )
+        artifact_level = _review_slider(
+            "Artefakte/Stoerungen",
+            "Hoerbare Fehler wie Rauschen, metallischer Klang, Knacken, Hall, Pumpen oder instabile Phoneme. 1 = kaum Stoerungen, 5 = stark stoerend.",
+            key=f"{wav}-artifact-level",
+        )
+    st.markdown("**Optimierungsbedarf**  \n*Markiere, welche Stellschrauben beim naechsten Lauf wahrscheinlich helfen wuerden.*")
     needs = st.multiselect(
         "Was sollte optimiert werden?",
         [
@@ -935,6 +965,11 @@ def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedb
     if st.button("Schliessen", key=f"{wav}-close-review"):
         st.session_state[dialog_key] = False
         st.rerun()
+
+
+def _review_slider(label: str, description: str, *, key: str) -> int:
+    st.markdown(f"**{label}**  \n*{description}*")
+    return int(st.slider(label, 1, 5, 3, key=key, label_visibility="collapsed"))
 
 
 def _render_abort_control(output_dir: Path) -> None:
