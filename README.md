@@ -8,7 +8,7 @@ A local macOS-first app for transcribing audio files, detecting speakers locally
 - Speaker diarization: local `diarize`, no account required
 - Voice activity detection: pyannote VAD for transcription; Silero VAD for voice-segment scoring when available
 - Export: DOCX, HTML, feedback CSV, diarization JSON, and diarization JSONL
-- Voice pipeline: target-speaker curation, reference-pack building, mock synthesis, metadata logging
+- Voice pipeline: target-speaker curation, manual reference-pack review, optional reference denoise, mock/XTTS synthesis, metadata logging
 - No OpenAI API, no cloud transcription API
 
 Speaker detection runs locally with `diarize`. No token, paid service, or cloud account is required.
@@ -56,7 +56,7 @@ Streamlit will open the local app in your browser.
 5. Start transcription.
 6. Rename speaker labels after processing.
 7. Download DOCX, HTML, feedback CSV, and diarization JSON/JSONL outputs.
-8. Optionally open the separate Voice-Pipeline page for target-speaker curation and synthesis.
+8. Optionally open the separate Voice-Pipeline page for target-speaker curation, reference review, and synthesis.
 
 ## Recommended Settings
 
@@ -133,16 +133,19 @@ The Voice-Pipeline page can use the current audio and speaker segments from the 
 - quality scoring with RMS, peak, clipping, speech ratio, silence ratio, simple SNR, and overlap metrics
 - overlap rejection for segments that collide with another speaker
 - accepted/rejected segment folders
-- reference-pack building
+- automatic reference-pack building
+- manual reference-pack curation with per-clip playback
+- optional ffmpeg-based reference-clip denoise before reference-pack building
 - optional mock, XTTS, or OpenVoice synthesis
 - synthetic sidecar metadata and synthesis JSONL logging
 - Voice-Pipeline feedback CSV export
+- generated-sample review CSV export with human quality ratings
 
 ## Privacy and Consent
 
 Audio files, generated transcripts, feedback CSVs, local runs, model caches, and virtual environments are not meant to be committed. The `.gitignore` excludes local uploads and run artifacts by default.
 
-Before publishing or sharing logs, check that they do not contain private transcript excerpts.
+Before publishing or sharing logs, check that they do not contain private transcript excerpts. Files under `data/` and files downloaded to your local `Downloads` folder are not published to GitHub unless you explicitly add and commit them.
 
 Voice synthesis and voice-cloning workflows must only be used with explicit consent from the target speaker. Generated audio must be disclosed as synthetic.
 
@@ -182,7 +185,7 @@ Optional heavy dependencies are intentionally not required for tests:
 - `faster-whisper` for transcription inside scoring
 - Silero VAD via `silero-vad` when available, with internal 16 kHz resampling for 24 kHz clips and an energy-based fallback
 - Coqui `TTS` for XTTS-v2 synthesis, installed in a separate environment
-- OpenVoice V2 plus checkpoints for OpenVoice synthesis
+- OpenVoice V2 plus checkpoints for OpenVoice synthesis; the adapter boundary exists, but checkpoint-specific synthesis wiring is not configured in this repo yet
 
 ## Isolated XTTS Environment
 
@@ -199,6 +202,12 @@ export XTTS_PYTHON=/absolute/path/to/xtts/python
 ```
 
 XTTS may download model weights on first use. Review the XTTS-v2 model license and deployment terms before using generated audio outside local experiments.
+
+## OpenVoice Status
+
+The OpenVoice backend is currently a guarded adapter, not a complete local OpenVoice setup. If selected without a separate OpenVoice V2 installation and configured checkpoints, the app fails fast with a clear error instead of silently producing invalid output.
+
+Use XTTS or the mock backend for current end-to-end tests. OpenVoice can be wired later once the exact repository, checkpoint layout, and conversion flow are selected.
 
 ## Input Format
 
@@ -262,6 +271,16 @@ voice-pipeline build-reference-pack \
   --target-total-sec 60
 ```
 
+In the Streamlit UI, the automatic reference pack can be refined manually:
+
+1. Open `Reference-Pack manuell kuratieren`.
+2. Listen to accepted clips.
+3. Keep only clean, unmistakable target-speaker clips.
+4. Click `Auswahl als Reference-Pack verwenden`.
+5. Run synthesis with the current reference pack without rerunning the full pipeline.
+
+The UI can also create denoised reference copies before building a pack. This uses ffmpeg `afftdn`, keeps original clips untouched, and records denoise settings in feedback metadata.
+
 XTTS synthesis:
 
 ```bash
@@ -286,6 +305,8 @@ voice-pipeline synthesize \
   --consent-confirmed
 ```
 
+The OpenVoice command currently requires a separate OpenVoice V2 installation and checkpoint-specific wiring. Without that setup it exits with an explanatory error.
+
 End-to-end with the lightweight mock backend:
 
 ```bash
@@ -306,6 +327,7 @@ voice-pipeline run-all \
 data/output/SPEAKER_02/
   raw_segments/
   clean_segments/
+  denoised_segments/
   rejected_segments/
   voice_refs/
   generated_samples/
@@ -314,6 +336,8 @@ data/output/SPEAKER_02/
     segments.jsonl
     accepted.jsonl
     rejected.jsonl
+    reference_source.jsonl
+    manual_reference_selection.jsonl
     synthesis_runs.jsonl
     voice_feedback.csv
   report.md
@@ -323,6 +347,12 @@ Each generated sample also gets a sidecar file such as:
 
 ```text
 sample_xtts_001.wav.synthetic.json
+```
+
+Manual sample reviews can export files such as:
+
+```text
+SPEAKER_02-sample_xtts_001-quality-review.csv
 ```
 
 ## Configuration
@@ -339,6 +369,17 @@ Important quality defaults include:
 
 The default overlap policy rejects target-speaker clips that overlap another speaker in the diarization export.
 
+The UI exposes additional voice-reference controls:
+
+- sample rate: 24 kHz for XTTS-oriented quality, 16 kHz for smaller files
+- target reference-pack duration
+- preferred reference-clip duration range
+- minimum speech ratio
+- clipping, RMS, and peak thresholds
+- optional reference denoise strength
+
+In practical tests, smaller manually selected packs can outperform large automatic packs. Start with 3-6 clean clips and compare against the automatic pack.
+
 ## Voice Feedback CSV
 
 Each Voice-Pipeline run writes `manifests/voice_feedback.csv`. It captures:
@@ -351,15 +392,20 @@ Each Voice-Pipeline run writes `manifests/voice_feedback.csv`. It captures:
 - overlap counts and rejected-overlap counts
 - reject-reason counts
 - reference-pack target and actual duration
+- reference-pack selection mode and denoise settings when available
 - synthesis backend and output path when synthesis was run
 
 Use this file to compare whether pipeline changes improve curation quality over repeated runs.
+
+Generated samples can also be reviewed from the UI. The review export combines technical run metadata with human ratings for overall quality, speaker similarity, target-speaker accuracy, intelligibility, naturalness, artifact level, optimization needs, and notes.
 
 ## Troubleshooting
 
 - `ffmpeg is required`: install `ffmpeg` and make sure it is on `PATH`.
 - `Install faster-whisper`: transcription is optional; run scoring without `--transcribe` or install the package.
 - `XTTS requires a separate Python environment`: run `bash scripts/setup_xtts_env.sh` or set `XTTS_PYTHON`.
-- `OpenVoice V2 ... checkpoints`: OpenVoice requires a separate repository/checkpoint setup; the adapter boundary is present but checkpoint-specific wiring must be configured.
+- `OpenVoice V2 is not installed`: OpenVoice requires a separate repository/checkpoint setup; the adapter boundary is present but checkpoint-specific wiring must still be configured.
 - `synthesis requires --consent-confirmed`: confirm explicit target-speaker consent and rerun with the required flag.
 - `accepted_count` is unexpectedly `0`: check `voice_feedback.csv` reject reasons. If `low_speech_ratio` dominates, confirm Silero VAD is installed and that the clips are readable WAV files. If `overlaps_other_speaker` dominates, try disabling overlap rejection for diagnosis, but keep it enabled for high-quality reference packs.
+- Synthetic voice is understandable but not similar enough: try a smaller manually curated reference pack, then A/B test with reference denoise. If similarity remains weak, test another backend instead of only increasing reference duration.
+- Denoise sounds metallic: lower denoise strength or disable it. The original clean segments remain available.
