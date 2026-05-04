@@ -61,3 +61,36 @@ def test_synthesis_review_csv_combines_technical_and_human_metrics(tmp_path):
     assert metrics[("technical_reference_pack", "ref_count")] == "1"
     assert metrics[("human_review", "overall_quality_1_to_5")] == "4"
     assert metrics[("human_review", "notes")] == "nah dran"
+
+
+def test_synthesis_review_csv_uses_current_sample_sidecar_metadata(tmp_path):
+    technical = build_voice_feedback_csv(
+        speaker="SPEAKER_00",
+        source_audio=tmp_path / "audio.wav",
+        diarization_path=tmp_path / "diarization.json",
+        settings={"backend": "xtts"},
+        raw_rows=[],
+        scored_rows=[],
+        accepted_rows=[],
+        rejected_rows=[],
+        synthesis_metadata={"backend": "xtts", "synthetic": True, "output_file": "old_sample.wav"},
+    )
+
+    review_csv = build_synthesis_review_csv(
+        speaker="SPEAKER_00",
+        sample_wav=tmp_path / "new_sample.wav",
+        technical_feedback_csv=technical,
+        review={"overall_quality_1_to_5": 2},
+        sample_synthesis_metadata={
+            "backend": "xtts",
+            "synthetic": True,
+            "output_file": "new_sample.wav",
+            "reference_files": ["ref_001.wav", "ref_002.wav"],
+        },
+    )
+
+    rows = list(csv.DictReader(StringIO(review_csv)))
+    metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
+
+    assert metrics[("technical_synthesis", "output_file")] == "new_sample.wav"
+    assert metrics[("technical_synthesis", "reference_file_count")] == "2"

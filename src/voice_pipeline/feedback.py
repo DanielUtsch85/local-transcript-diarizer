@@ -75,6 +75,7 @@ def build_synthesis_review_csv(
     sample_wav: Path | str,
     technical_feedback_csv: str,
     review: dict[str, Any],
+    sample_synthesis_metadata: dict[str, Any] | None = None,
 ) -> str:
     buffer = StringIO()
     writer = csv.writer(buffer)
@@ -90,8 +91,15 @@ def build_synthesis_review_csv(
     for row in technical_rows:
         category = row.get("category", "")
         metric = row.get("metric", "")
+        if sample_synthesis_metadata and category == "synthesis":
+            continue
         if category and metric:
             add(f"technical_{category}", metric, row.get("value", ""), row.get("unit", ""), row.get("notes", ""))
+    if sample_synthesis_metadata:
+        add("technical_synthesis", "backend", sample_synthesis_metadata.get("backend", ""))
+        add("technical_synthesis", "synthetic", sample_synthesis_metadata.get("synthetic", ""))
+        add("technical_synthesis", "output_file", sample_synthesis_metadata.get("output_file", ""))
+        add("technical_synthesis", "reference_file_count", len(sample_synthesis_metadata.get("reference_files", [])), "files")
     for key, value in review.items():
         add("human_review", key, value)
     return buffer.getvalue()

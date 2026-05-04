@@ -1177,6 +1177,7 @@ def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedb
         sample_wav=wav,
         technical_feedback_csv=technical_feedback_path.read_text(encoding="utf-8"),
         review=review,
+        sample_synthesis_metadata=_read_sample_sidecar(wav),
     )
     review_path = output_dir / "manifests" / f"{wav.stem}-quality-review.csv"
     review_path.write_text(csv_text, encoding="utf-8")
@@ -1197,6 +1198,17 @@ def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedb
 def _review_slider(label: str, description: str, *, key: str) -> int:
     st.markdown(f"**{label}**  \n*{description}*")
     return int(st.slider(label, 1, 5, 3, key=key, label_visibility="collapsed"))
+
+
+def _read_sample_sidecar(wav: Path) -> dict[str, Any] | None:
+    sidecar = wav.with_suffix(wav.suffix + ".synthetic.json")
+    if not sidecar.exists():
+        return None
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _render_abort_control(output_dir: Path) -> None:
