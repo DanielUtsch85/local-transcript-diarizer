@@ -29,12 +29,12 @@ def _speaker_dir_from_out(out: Path) -> Path:
     return out
 
 
-def _backend(name: str):
+def _backend(name: str, timeout_sec: int = 30 * 60, xtts_license_confirmed: bool = False):
     normalized = name.lower()
     if normalized == "mock":
         return MockBackend()
     if normalized == "xtts":
-        return XTTSBackend()
+        return XTTSBackend(timeout_sec=timeout_sec, license_confirmed=xtts_license_confirmed)
     if normalized == "openvoice":
         return OpenVoiceBackend()
     raise typer.BadParameter(f"Unsupported backend: {name}")
@@ -180,13 +180,19 @@ def synthesize_command(
     language: str = typer.Option("de", "--language"),
     out: Path = typer.Option(..., "--out"),
     consent_confirmed: bool = typer.Option(False, "--consent-confirmed"),
+    synthesis_timeout_sec: int = typer.Option(30 * 60, "--synthesis-timeout-sec"),
+    xtts_license_confirmed: bool = typer.Option(False, "--xtts-license-confirmed"),
 ) -> None:
     try:
         validate_consent(consent_confirmed)
     except PermissionError as exc:
         raise typer.BadParameter(str(exc))
     reference_files = sorted((speaker_dir / "voice_refs").glob("ref_*.wav"))
-    result = _backend(backend).synthesize(text, reference_files, out, language=language)
+    result = _backend(
+        backend,
+        timeout_sec=synthesis_timeout_sec,
+        xtts_license_confirmed=xtts_license_confirmed,
+    ).synthesize(text, reference_files, out, language=language)
     metadata = synthesis_metadata(speaker_dir.name, backend, text, language, reference_files, result, consent_confirmed)
     write_synthesis_log(speaker_dir / "manifests" / "synthesis_runs.jsonl", metadata, result)
     typer.echo(f"synthetic: {result}")
@@ -203,6 +209,8 @@ def run_all_command(
     consent_confirmed: bool = typer.Option(False, "--consent-confirmed"),
     out: Path = typer.Option(..., "--out"),
     config: Optional[Path] = typer.Option(None, "--config"),
+    synthesis_timeout_sec: int = typer.Option(30 * 60, "--synthesis-timeout-sec"),
+    xtts_license_confirmed: bool = typer.Option(False, "--xtts-license-confirmed"),
 ) -> None:
     cfg = load_config(config)
     validate_consent(consent_confirmed)
@@ -227,7 +235,11 @@ def run_all_command(
     build_reference_pack_impl(clean, manifests / "accepted.jsonl", out / "voice_refs", target_total_sec=float(cfg["reference_pack"]["target_total_sec"]))
     synth_out = out / "generated_samples" / f"sample_{backend}_001.wav"
     reference_files = sorted((out / "voice_refs").glob("ref_*.wav"))
-    result = _backend(backend).synthesize(text, reference_files, synth_out, language=language)
+    result = _backend(
+        backend,
+        timeout_sec=synthesis_timeout_sec,
+        xtts_license_confirmed=xtts_license_confirmed,
+    ).synthesize(text, reference_files, synth_out, language=language)
     metadata = synthesis_metadata(speaker, backend, text, language, reference_files, result, consent_confirmed)
     write_synthesis_log(manifests / "synthesis_runs.jsonl", metadata, result)
     typer.echo(f"completed: {out}")

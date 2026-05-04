@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -36,12 +37,19 @@ def _resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) ->
     return np.interp(target_x, source_x, samples).astype(np.float32)
 
 
+@lru_cache(maxsize=1)
+def _load_silero_model():
+    from silero_vad import load_silero_vad  # type: ignore
+
+    return load_silero_vad()
+
+
 def speech_ratio(path: Path) -> VadResult:
     samples, sample_rate = read_wav_mono(path)
     try:
-        from silero_vad import get_speech_timestamps, load_silero_vad  # type: ignore
+        from silero_vad import get_speech_timestamps  # type: ignore
 
-        model = load_silero_vad()
+        model = _load_silero_model()
         vad_sample_rate = sample_rate if sample_rate in {8000, 16000} else 16000
         vad_samples = _resample_linear(samples, sample_rate, vad_sample_rate)
         timestamps = get_speech_timestamps(vad_samples, model, sampling_rate=vad_sample_rate)
