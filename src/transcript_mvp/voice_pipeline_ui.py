@@ -73,7 +73,6 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         )
 
     run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)
-    _render_pipeline_stepper(st, active_index=None, run_synthesis=run_synthesis)
 
     with st.form("voice-pipeline-settings"):
         speaker = st.selectbox("Zielsprecher", speakers)
@@ -89,25 +88,138 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         )
         consent_confirmed = st.checkbox("Explizite Einwilligung des Zielsprechers liegt vor")
         with st.expander("Pipeline-Parameter"):
-            sample_rate = st.selectbox("Sample Rate", [24000, 16000], index=0)
-            min_duration = st.number_input("Min. Segmentlaenge Sekunden", min_value=0.1, max_value=30.0, value=2.0)
-            max_duration = st.number_input("Max. Segmentlaenge Sekunden", min_value=0.5, max_value=60.0, value=15.0)
-            padding_ms = st.number_input("Padding ms", min_value=0, max_value=1000, value=100, step=25)
-            target_total_sec = st.number_input("Ziel-Laenge Reference-Pack Sekunden", min_value=1, max_value=600, value=60)
+            sample_rate = st.selectbox(
+                "Sample Rate",
+                [24000, 16000],
+                index=0,
+                help=(
+                    "Bestimmt die technische Aufloesung der Referenzclips. 24 kHz erhaelt mehr Hoehen "
+                    "und ist fuer XTTS meist sinnvoller; 16 kHz ist kleiner und schneller, kann aber etwas weniger brillant klingen."
+                ),
+            )
+            min_duration = st.number_input(
+                "Min. Segmentlaenge Sekunden",
+                min_value=0.1,
+                max_value=30.0,
+                value=2.0,
+                help=(
+                    "Sehr kurze Clips enthalten oft zu wenig Stimmeigenschaften. Hoehere Werte koennen die "
+                    "Stimmstabilitaet verbessern, reduzieren aber die Anzahl nutzbarer Referenzen."
+                ),
+            )
+            max_duration = st.number_input(
+                "Max. Segmentlaenge Sekunden",
+                min_value=0.5,
+                max_value=60.0,
+                value=15.0,
+                help=(
+                    "Sehr lange Clips enthalten haeufig Themenwechsel, Atmer, Nebengeraeusche oder mehrere Prosodiephasen. "
+                    "Kuerzere Maximalwerte machen Referenzen homogener, koennen aber gutes Material ausschliessen."
+                ),
+            )
+            padding_ms = st.number_input(
+                "Padding ms",
+                min_value=0,
+                max_value=1000,
+                value=100,
+                step=25,
+                help=(
+                    "Fuegt vor und nach jedem Segment etwas Kontext hinzu. Etwas Padding verhindert abgeschnittene "
+                    "Anlaute; zu viel Padding kann Stille, Fremdstimmen oder Raumgeraeusche in die Referenzen bringen."
+                ),
+            )
+            target_total_sec = st.number_input(
+                "Ziel-Laenge Reference-Pack Sekunden",
+                min_value=1,
+                max_value=600,
+                value=60,
+                help=(
+                    "Legt fest, wie viel akzeptiertes Referenzmaterial fuer die Stimme gesammelt wird. Mehr Material "
+                    "kann Aehnlichkeit und Robustheit verbessern, erhoeht aber Laufzeit und kann bei gemischter Qualitaet auch stoeren."
+                ),
+            )
+            preferred_min_duration = st.number_input(
+                "Bevorzugte Ref-Clip Mindestlaenge Sekunden",
+                min_value=0.5,
+                max_value=60.0,
+                value=4.0,
+                help=(
+                    "Beeinflusst das Ranking fuer das Reference-Pack. Clips ab dieser Laenge werden bevorzugt, "
+                    "weil sie meist genug Klangfarbe, Rhythmus und Artikulation enthalten."
+                ),
+            )
+            preferred_max_duration = st.number_input(
+                "Bevorzugte Ref-Clip Maximallaenge Sekunden",
+                min_value=0.5,
+                max_value=60.0,
+                value=12.0,
+                help=(
+                    "Beeinflusst das Ranking fuer das Reference-Pack. Clips bis zu dieser Laenge werden bevorzugt, "
+                    "weil sie meist fokussierter sind und weniger Nebengeräusche oder Sprecherwechsel enthalten."
+                ),
+            )
+            min_speech_ratio = st.slider(
+                "Min. Sprachanteil",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.75,
+                step=0.01,
+                help=(
+                    "Mindestanteil erkannter Sprache im Segment. Hoehere Werte entfernen Pausen und Stille strenger; "
+                    "das kann Referenzen sauberer machen, aber natuerliche Sprechpausen verlieren."
+                ),
+            )
+            max_clipping_ratio = st.number_input(
+                "Max. Clipping-Anteil",
+                min_value=0.0,
+                max_value=0.1,
+                value=0.001,
+                step=0.0005,
+                format="%.4f",
+                help=(
+                    "Erlaubter Anteil uebersteuerter Samples. Niedrigere Werte schuetzen vor kratziger, verzerrter Synthese; "
+                    "zu strenge Werte koennen laute, sonst brauchbare Segmente aussortieren."
+                ),
+            )
+            min_rms_db = st.number_input(
+                "Min. Lautheit RMS dB",
+                min_value=-80.0,
+                max_value=0.0,
+                value=-35.0,
+                step=1.0,
+                help=(
+                    "Sortiert sehr leise Segmente aus. Zu leise Referenzen enthalten oft mehr Rauschen als Stimme; "
+                    "ein hoeherer Wert macht die Auswahl sauberer, kann aber leise gesprochene gute Passagen entfernen."
+                ),
+            )
+            max_peak_db = st.number_input(
+                "Max. Peak dB",
+                min_value=-24.0,
+                max_value=0.0,
+                value=-0.5,
+                step=0.1,
+                help=(
+                    "Obergrenze fuer Spitzenpegel. Werte nahe 0 dB lassen laute Clips zu; niedrigere Werte verlangen "
+                    "mehr Headroom und koennen harte, ueberlaute Referenzen vermeiden."
+                ),
+            )
             synthesis_timeout_min = st.number_input(
                 "Synthese automatisch abbrechen nach Minuten",
                 min_value=1,
                 max_value=180,
                 value=30,
                 help=(
-                    "Beendet haengende Synthese-Prozesse hart. Die vorher berechneten Pipeline-Werte "
-                    "und die Fehleranalyse werden trotzdem als Voice-Feedback-CSV geschrieben."
+                    "Hat keinen Klangvorteil, schuetzt aber vor haengenden Modellprozessen. Wenn der Abbruch greift, "
+                    "bleiben Referenzdaten und Fehleranalyse erhalten, aber es entsteht kein vollstaendiges Sample."
                 ),
             )
             reject_overlaps = st.checkbox(
                 "Ueberlappungen mit anderen Sprechern ablehnen",
                 value=True,
-                help="Markiert Segmente als ungeeignet, wenn sich im Diarization-Export zur gleichen Zeit ein anderer Sprecher ueberschneidet.",
+                help=(
+                    "Entfernt Passagen, in denen andere Sprecher gleichzeitig erkannt wurden. Das schuetzt die "
+                    "Stimmidentitaet der synthetischen Stimme, kann aber bei ungenauer Diarization brauchbare Clips verlieren."
+                ),
             )
         eligible_count = sum(
             1
@@ -118,11 +230,20 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             f"Geplanter Lauf: {eligible_count} Segmente fuer {speaker}. "
             "Die Bewertung kann je nach VAD und Segmentanzahl mehrere Minuten dauern."
         )
+        if preferred_min_duration > preferred_max_duration:
+            st.warning("Die bevorzugte Mindestlaenge sollte nicht groesser als die bevorzugte Maximallaenge sein.")
         submitted = st.form_submit_button("Referenzdaten bauen", type="primary")
 
     output_dir = data_dir / "output" / speaker
     _render_abort_control(output_dir)
     if submitted:
+        st.session_state[_current_sample_key(output_dir)] = []
+        if min_duration > max_duration:
+            st.error("Min. Segmentlaenge darf nicht groesser als Max. Segmentlaenge sein.")
+            return
+        if preferred_min_duration > preferred_max_duration:
+            st.error("Bevorzugte Ref-Clip Mindestlaenge darf nicht groesser als die Maximallaenge sein.")
+            return
         if run_synthesis and not consent_confirmed:
             st.error("Synthese erfordert die bestaetigte Einwilligung des Zielsprechers.")
             return
@@ -136,6 +257,12 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             max_duration_sec=float(max_duration),
             padding_ms=int(padding_ms),
             target_total_sec=float(target_total_sec),
+            preferred_min_duration_sec=float(preferred_min_duration),
+            preferred_max_duration_sec=float(preferred_max_duration),
+            min_speech_ratio=float(min_speech_ratio),
+            max_clipping_ratio=float(max_clipping_ratio),
+            min_rms_db=float(min_rms_db),
+            max_peak_db=float(max_peak_db),
             reject_overlaps=reject_overlaps,
             run_synthesis=run_synthesis,
             backend=backend,
@@ -219,6 +346,12 @@ def _run_pipeline_from_ui(
     max_duration_sec: float,
     padding_ms: int,
     target_total_sec: float,
+    preferred_min_duration_sec: float,
+    preferred_max_duration_sec: float,
+    min_speech_ratio: float,
+    max_clipping_ratio: float,
+    min_rms_db: float,
+    max_peak_db: float,
     reject_overlaps: bool,
     run_synthesis: bool,
     backend: str,
@@ -231,6 +364,10 @@ def _run_pipeline_from_ui(
     cfg = load_config()
     cfg["quality"]["min_duration_sec"] = min_duration_sec
     cfg["quality"]["max_duration_sec"] = max_duration_sec
+    cfg["quality"]["min_speech_ratio"] = min_speech_ratio
+    cfg["quality"]["max_clipping_ratio"] = max_clipping_ratio
+    cfg["quality"]["min_rms_db"] = min_rms_db
+    cfg["quality"]["max_peak_db"] = max_peak_db
     cfg["quality"]["max_overlap_sec"] = 0.0 if reject_overlaps else 999999.0
     prepared = output_dir / "work" / f"{source_audio.stem}_{sample_rate}.wav"
     raw_dir = output_dir / "raw_segments"
@@ -241,6 +378,13 @@ def _run_pipeline_from_ui(
     started_at = time.monotonic()
     stepper = st.empty()
     current_step = {"index": None, "started_at": started_at}
+    step_durations: dict[int, float] = {}
+
+    def record_current_step(now: float) -> None:
+        current_index = current_step["index"]
+        if current_index is None or current_index in step_durations:
+            return
+        step_durations[int(current_index)] = max(0.0, now - float(current_step["started_at"]))
 
     def show_step(
         index: int | None,
@@ -249,9 +393,13 @@ def _run_pipeline_from_ui(
         completed: bool = False,
         skipped_indices: set[int] | None = None,
     ) -> None:
-        if index is not None and current_step["index"] != index and not completed and failed_index is None:
+        now = time.monotonic()
+        if index is not None and current_step["index"] != index:
+            record_current_step(now)
             current_step["index"] = index
-            current_step["started_at"] = time.monotonic()
+            current_step["started_at"] = now
+        if completed or failed_index is not None:
+            record_current_step(now)
         _render_pipeline_stepper(
             stepper,
             active_index=index,
@@ -259,6 +407,7 @@ def _run_pipeline_from_ui(
             completed=completed,
             overall_started_at=started_at,
             step_started_at=current_step["started_at"] if index is not None else None,
+            step_durations=step_durations,
             skipped_indices=skipped_indices,
             run_synthesis=run_synthesis,
         )
@@ -344,7 +493,14 @@ def _run_pipeline_from_ui(
         show_step(4)
         status.update(label="Reference-Pack bauen")
         stage_detail.write("Reference-Pack wird gebaut.")
-        reference = build_reference_pack(clean_dir, manifests_dir / "accepted.jsonl", output_dir / "voice_refs", target_total_sec=target_total_sec)
+        reference = build_reference_pack(
+            clean_dir,
+            manifests_dir / "accepted.jsonl",
+            output_dir / "voice_refs",
+            target_total_sec=target_total_sec,
+            preferred_min_duration_sec=preferred_min_duration_sec,
+            preferred_max_duration_sec=preferred_max_duration_sec,
+        )
         overall_progress.progress(90, text="Reference-Pack gebaut")
 
         synth_metadata = None
@@ -393,6 +549,9 @@ def _run_pipeline_from_ui(
                     )
                     synth_metadata = synthesis_metadata(speaker, backend, text, language, reference_files, result, consent_confirmed)
                     write_synthesis_log(manifests_dir / "synthesis_runs.jsonl", synth_metadata, result)
+                    current_samples = st.session_state.setdefault(_current_sample_key(output_dir), [])
+                    if str(result) not in current_samples:
+                        current_samples.append(str(result))
                 except (RuntimeError, NotImplementedError, ValueError) as exc:
                     synthesis_error = str(exc)
                 finally:
@@ -410,6 +569,12 @@ def _run_pipeline_from_ui(
                 "max_duration_sec": max_duration_sec,
                 "padding_ms": padding_ms,
                 "target_total_sec": target_total_sec,
+                "preferred_min_duration_sec": preferred_min_duration_sec,
+                "preferred_max_duration_sec": preferred_max_duration_sec,
+                "min_speech_ratio": min_speech_ratio,
+                "max_clipping_ratio": max_clipping_ratio,
+                "min_rms_db": min_rms_db,
+                "max_peak_db": max_peak_db,
                 "reject_overlaps": reject_overlaps,
                 "backend": backend,
                 "run_synthesis": run_synthesis,
@@ -450,7 +615,11 @@ def _run_pipeline_from_ui(
 
 
 def _elapsed(started_at: float) -> str:
-    elapsed = max(0, int(time.monotonic() - started_at))
+    return _format_duration(time.monotonic() - started_at)
+
+
+def _format_duration(duration_sec: float) -> str:
+    elapsed = max(0, int(duration_sec))
     minutes, seconds = divmod(elapsed, 60)
     if minutes:
         return f"{minutes}m {seconds:02d}s"
@@ -476,10 +645,12 @@ def _render_pipeline_stepper(
     completed: bool = False,
     overall_started_at: float | None = None,
     step_started_at: float | None = None,
+    step_durations: dict[int, float] | None = None,
     skipped_indices: set[int] | None = None,
     run_synthesis: bool = True,
 ) -> None:
     skipped_indices = skipped_indices or set()
+    step_durations = step_durations or {}
     if not run_synthesis and not completed:
         skipped_indices = set(skipped_indices) | {5}
     overall_label = _elapsed(overall_started_at) if overall_started_at is not None else "bereit"
@@ -493,7 +664,11 @@ def _render_pipeline_stepper(
         elif failed_index == index:
             state = "failed"
             state_label = "Fehler"
-            timing = _elapsed(step_started_at) if step_started_at is not None else ""
+            timing = (
+                f"Dauer {_format_duration(step_durations[index])}"
+                if index in step_durations
+                else (_elapsed(step_started_at) if step_started_at is not None else "")
+            )
         elif completed or (active_index is not None and index < active_index):
             state = "done"
             state_label = "Fertig"
@@ -504,10 +679,14 @@ def _render_pipeline_stepper(
             state = "pending"
             state_label = "Wartet"
             timing = ""
-        if index == active_index and step_started_at is not None:
+        if state == "active" and index == active_index and step_started_at is not None:
             timing = f"Schrittzeit {_elapsed(step_started_at)}"
         elif state == "done":
-            timing = "abgeschlossen"
+            timing = (
+                f"Dauer {_format_duration(step_durations[index])}"
+                if index in step_durations
+                else "abgeschlossen"
+            )
         elif state == "pending":
             timing = "ausstehend"
         items.append(
@@ -625,6 +804,7 @@ def _render_existing_outputs(output_dir: Path) -> None:
     rejected_path = manifests / "rejected.jsonl"
     if not accepted_path.exists() and not rejected_path.exists():
         return
+    generated = _current_session_generated(output_dir)
     st.divider()
     st.subheader("Aktueller Pipeline-Stand")
     accepted = read_jsonl(accepted_path) if accepted_path.exists() else []
@@ -633,7 +813,7 @@ def _render_existing_outputs(output_dir: Path) -> None:
     cols[0].metric("Akzeptiert", len(accepted))
     cols[1].metric("Abgelehnt", len(rejected))
     cols[2].metric("Ref-Clips", len(list((output_dir / "voice_refs").glob("ref_*.wav"))))
-    cols[3].metric("Samples", len(list((output_dir / "generated_samples").glob("*.wav"))))
+    cols[3].metric("Samples", len(generated))
 
     feedback = manifests / "voice_feedback.csv"
     action_cols = st.columns([1, 1, 2])
@@ -647,7 +827,6 @@ def _render_existing_outputs(output_dir: Path) -> None:
     if accepted:
         with st.expander("Akzeptierte Segmente anzeigen"):
             st.dataframe(pd.DataFrame(accepted), use_container_width=True, height=320)
-    generated = sorted((output_dir / "generated_samples").glob("*.wav"))
     if generated:
         st.subheader("Generierte Samples")
         for wav in generated:
@@ -672,6 +851,20 @@ def _render_existing_outputs(output_dir: Path) -> None:
     if report.exists():
         with st.expander("Report"):
             st.markdown(report.read_text(encoding="utf-8"))
+
+
+def _current_sample_key(output_dir: Path) -> str:
+    return f"voice-pipeline-current-samples:{output_dir.resolve()}"
+
+
+def _current_session_generated(output_dir: Path) -> list[Path]:
+    current = st.session_state.get(_current_sample_key(output_dir), [])
+    generated: list[Path] = []
+    for value in current:
+        path = Path(str(value))
+        if path.exists() and path.suffix.lower() == ".wav":
+            generated.append(path)
+    return sorted(generated)
 
 
 def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_path: Path) -> None:
