@@ -20,7 +20,7 @@ from voice_pipeline.feedback import build_synthesis_review_csv, build_voice_feed
 from voice_pipeline.logging_utils import read_jsonl, write_jsonl
 from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
 from voice_pipeline.quality import score_segment, segment_overlap
-from voice_pipeline.reference_pack import build_reference_pack
+from voice_pipeline.reference_pack import build_reference_pack, build_reference_pack_from_rows
 from voice_pipeline.segment_loader import filter_segments, load_segments, segment_filename
 from voice_pipeline.synthesis.mock_backend import MockBackend
 from voice_pipeline.synthesis.openvoice_backend import OpenVoiceBackend
@@ -273,7 +273,15 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             consent_confirmed=consent_confirmed,
         )
 
-    _render_existing_outputs(output_dir)
+    _render_existing_outputs(
+        output_dir,
+        backend=backend,
+        text=text,
+        language=language,
+        consent_confirmed=consent_confirmed,
+        synthesis_timeout_sec=int(synthesis_timeout_min) * 60,
+        xtts_license_confirmed=xtts_license_confirmed,
+    )
 
 
 def _resolve_source_audio(data_dir: Path) -> Path | None:
@@ -529,7 +537,7 @@ def _run_pipeline_from_ui(
                 )
 
             validate_consent(consent_confirmed)
-            output_wav = output_dir / "generated_samples" / f"sample_{backend}_001.wav"
+            output_wav = _next_synthesis_output(output_dir, backend)
             reference_files = sorted((output_dir / "voice_refs").glob("ref_*.wav"))
             if not reference_files:
                 synthesis_error = "Keine Reference-Clips vorhanden; Synthese wurde nicht gestartet."
@@ -798,7 +806,16 @@ def _write_report(speaker_dir: Path, accepted: list[dict[str, Any]], rejected: l
     (speaker_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _render_existing_outputs(output_dir: Path) -> None:
+def _render_existing_outputs(
+    output_dir: Path,
+    *,
+    backend: str,
+    text: str,
+    language: str,
+    consent_confirmed: bool,
+    synthesis_timeout_sec: int,
+    xtts_license_confirmed: bool,
+) -> None:
     manifests = output_dir / "manifests"
     accepted_path = manifests / "accepted.jsonl"
     rejected_path = manifests / "rejected.jsonl"
@@ -827,6 +844,16 @@ def _render_existing_outputs(output_dir: Path) -> None:
     if accepted:
         with st.expander("Akzeptierte Segmente anzeigen"):
             st.dataframe(pd.DataFrame(accepted), use_container_width=True, height=320)
+        _render_manual_reference_builder(output_dir, accepted)
+    _render_reference_synthesis_controls(
+        output_dir,
+        backend=backend,
+        text=text,
+        language=language,
+        consent_confirmed=consent_confirmed,
+        synthesis_timeout_sec=synthesis_timeout_sec,
+        xtts_license_confirmed=xtts_license_confirmed,
+    )
     if generated:
         st.subheader("Generierte Samples")
         for wav in generated:
@@ -865,6 +892,206 @@ def _current_session_generated(output_dir: Path) -> list[Path]:
         if path.exists() and path.suffix.lower() == ".wav":
             generated.append(path)
     return sorted(generated)
+
+
+def _manual_reference_key(output_dir: Path) -> str:
+    return f"voice-pipeline-manual-refs:{output_dir.resolve()}"
+
+
+def _render_manual_reference_builder(output_dir: Path, accepted: list[dict[str, Any]]) -> None:
+    candidates = sorted(accepted, key=_reference_candidate_score, reverse=True)
+    if not candidates:
+        return
+    selection_key = _manual_reference_key(output_dir)
+    if selection_key not in st.session_state:
+        st.session_state[selection_key] = _default_reference_selection(candidates, target_total_sec=60.0)
+
+    with st.expander("Reference-Pack manuell kuratieren"):
+        st.caption(
+            "Hoere die besten akzeptierten Clips an und markiere nur eindeutige, saubere Zielsprecher-Passagen. "
+            "Ein kleiner, sauberer Pack ist fuer XTTS oft besser als viele gemischte Clips."
+        )
+        max_candidates = min(len(candidates), 60)
+        shown = st.slider(
+            "Kandidaten anzeigen",
+            min_value=min(5, max_candidates),
+            max_value=max_candidates,
+            value=min(20, max_candidates),
+            step=1,
+            help="Begrenzt nur die Anzeige in der UI. Bereits markierte Clips bleiben in der Auswahl, auch wenn sie gerade nicht sichtbar sind.",
+            key=f"{output_dir}-manual-ref-candidate-count",
+        )
+        selected_files = set(st.session_state.get(selection_key, []))
+        visible_rows = candidates[:shown]
+        for index, row in enumerate(visible_rows, start=1):
+            file_path = Path(str(row["file"]))
+            if not file_path.exists():
+                continue
+            file_id = str(file_path)
+            with st.container(border=True):
+                cols = st.columns([1, 3])
+                with cols[0]:
+                    selected = st.checkbox(
+                        f"Ref {index:02d}",
+                        value=file_id in selected_files,
+                        key=f"{output_dir}-manual-ref-{file_path.name}",
+                    )
+                    if selected:
+                        selected_files.add(file_id)
+                    else:
+                        selected_files.discard(file_id)
+                    st.caption(_reference_metric_line(row))
+                with cols[1]:
+                    st.audio(file_path.read_bytes(), format="audio/wav")
+
+        st.session_state[selection_key] = sorted(selected_files)
+        selected_rows = _selected_reference_rows(candidates, selected_files)
+        selected_total = sum(float(row.get("duration_sec") or 0.0) for row in selected_rows)
+        metric_cols = st.columns(3)
+        metric_cols[0].metric("Ausgewaehlt", len(selected_rows))
+        metric_cols[1].metric("Dauer", f"{selected_total:.1f}s")
+        metric_cols[2].metric("Kandidaten", len(candidates))
+        if st.button("Auswahl als Reference-Pack verwenden", disabled=not selected_rows, type="secondary"):
+            metadata = build_reference_pack_from_rows(
+                output_dir / "clean_segments",
+                selected_rows,
+                output_dir / "voice_refs",
+                target_total_sec=round(selected_total, 3),
+                selection_mode="manual",
+            )
+            write_jsonl(output_dir / "manifests" / "manual_reference_selection.jsonl", selected_rows)
+            st.session_state[_current_sample_key(output_dir)] = []
+            st.success(
+                f"Manuelles Reference-Pack gespeichert: {len(metadata.get('refs', []))} Clips, "
+                f"{metadata.get('actual_total_sec', 0)} Sekunden."
+            )
+
+
+def _render_reference_synthesis_controls(
+    output_dir: Path,
+    *,
+    backend: str,
+    text: str,
+    language: str,
+    consent_confirmed: bool,
+    synthesis_timeout_sec: int,
+    xtts_license_confirmed: bool,
+) -> None:
+    reference_files = sorted((output_dir / "voice_refs").glob("ref_*.wav"))
+    if not reference_files:
+        return
+    with st.expander("Synthese mit aktuellem Reference-Pack erzeugen"):
+        st.caption(
+            f"Aktueller Pack: {len(reference_files)} Referenzclips. "
+            "Nutze diesen Schritt nach manueller Auswahl, ohne die ganze Pipeline erneut zu starten."
+        )
+        if st.button("Synthese jetzt erzeugen", type="primary"):
+            _synthesize_reference_pack_from_ui(
+                output_dir=output_dir,
+                backend=backend,
+                text=text,
+                language=language,
+                consent_confirmed=consent_confirmed,
+                synthesis_timeout_sec=synthesis_timeout_sec,
+                xtts_license_confirmed=xtts_license_confirmed,
+            )
+
+
+def _synthesize_reference_pack_from_ui(
+    *,
+    output_dir: Path,
+    backend: str,
+    text: str,
+    language: str,
+    consent_confirmed: bool,
+    synthesis_timeout_sec: int,
+    xtts_license_confirmed: bool,
+) -> None:
+    reference_files = sorted((output_dir / "voice_refs").glob("ref_*.wav"))
+    if not reference_files:
+        st.error("Keine Reference-Clips vorhanden.")
+        return
+    try:
+        validate_consent(consent_confirmed)
+    except PermissionError as exc:
+        st.error(str(exc))
+        return
+    progress = st.progress(0, text=f"Synthese gestartet. Automatischer Abbruch in {_format_countdown(synthesis_timeout_sec)}.")
+
+    def update_synthesis_countdown(elapsed_sec: int, remaining_sec: int) -> None:
+        percent = int(min(100, max(0, elapsed_sec / max(1, synthesis_timeout_sec) * 100)))
+        progress.progress(percent, text=f"Synthese laeuft. Automatischer Abbruch in {_format_countdown(remaining_sec)}.")
+
+    output_wav = _next_synthesis_output(output_dir, backend)
+    try:
+        result = _backend(
+            backend,
+            timeout_sec=synthesis_timeout_sec,
+            pid_file=output_dir / "work" / "synthesis.pid",
+            xtts_license_confirmed=xtts_license_confirmed,
+            progress_callback=update_synthesis_countdown,
+        ).synthesize(text, reference_files, output_wav, language=language)
+    except (RuntimeError, NotImplementedError, ValueError) as exc:
+        progress.progress(100, text="Synthese abgebrochen oder fehlgeschlagen.")
+        st.error(f"Synthese fehlgeschlagen: {exc}")
+        return
+
+    metadata = synthesis_metadata(output_dir.name, backend, text, language, reference_files, result, consent_confirmed)
+    write_synthesis_log(output_dir / "manifests" / "synthesis_runs.jsonl", metadata, result)
+    current_samples = st.session_state.setdefault(_current_sample_key(output_dir), [])
+    if str(result) not in current_samples:
+        current_samples.append(str(result))
+    progress.progress(100, text="Synthese fertig.")
+    st.success(f"Synthetisches Sample erzeugt: {result.name}")
+    st.audio(result.read_bytes(), format="audio/wav")
+
+
+def _next_synthesis_output(output_dir: Path, backend: str) -> Path:
+    out_dir = output_dir / "generated_samples"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(1, 1000):
+        candidate = out_dir / f"sample_{backend}_{index:03d}.wav"
+        if not candidate.exists():
+            return candidate
+    return out_dir / f"sample_{backend}_{int(time.time())}.wav"
+
+
+def _default_reference_selection(rows: list[dict[str, Any]], target_total_sec: float) -> list[str]:
+    selected: list[str] = []
+    total = 0.0
+    for row in rows:
+        file_path = Path(str(row.get("file", "")))
+        if not file_path.exists():
+            continue
+        selected.append(str(file_path))
+        total += float(row.get("duration_sec") or 0.0)
+        if total >= target_total_sec and selected:
+            break
+    return selected
+
+
+def _selected_reference_rows(rows: list[dict[str, Any]], selected_files: set[str]) -> list[dict[str, Any]]:
+    return [row for row in rows if str(Path(str(row.get("file", "")))) in selected_files]
+
+
+def _reference_candidate_score(row: dict[str, Any]) -> float:
+    duration = float(row.get("duration_sec") or 0.0)
+    speech = float(row.get("speech_ratio") or 0.0)
+    clipping = float(row.get("clipping_ratio") or 0.0)
+    overlap = float(row.get("overlap_sec") or 0.0)
+    rms = float(row.get("rms_db") or -120.0)
+    duration_penalty = 0.0 if 5.0 <= duration <= 11.0 else min(abs(duration - 5.0), abs(duration - 11.0))
+    rms_penalty = abs(rms + 22.0)
+    return speech - clipping * 10.0 - overlap * 0.25 - duration_penalty * 0.08 - rms_penalty * 0.01
+
+
+def _reference_metric_line(row: dict[str, Any]) -> str:
+    return (
+        f"{float(row.get('duration_sec') or 0):.1f}s | "
+        f"Speech {float(row.get('speech_ratio') or 0):.2f} | "
+        f"RMS {float(row.get('rms_db') or 0):.1f} dB | "
+        f"Overlap {float(row.get('overlap_sec') or 0):.1f}s"
+    )
 
 
 def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_path: Path) -> None:

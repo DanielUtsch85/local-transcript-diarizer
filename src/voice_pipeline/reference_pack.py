@@ -28,12 +28,34 @@ def build_reference_pack(
 ) -> dict[str, Any]:
     rows = [row for row in read_jsonl(manifest_path) if row.get("accepted", True)]
     rows.sort(key=lambda row: _rank(row, preferred_min_duration_sec, preferred_max_duration_sec), reverse=True)
+    selected_rows: list[dict[str, Any]] = []
+    total = 0.0
+    for row in rows:
+        if total >= target_total_sec and selected_rows:
+            break
+        selected_rows.append(row)
+        total += float(row.get("duration_sec") or 0.0)
+    return build_reference_pack_from_rows(
+        clean_segments_dir,
+        selected_rows,
+        out_dir,
+        target_total_sec=target_total_sec,
+        selection_mode="automatic",
+    )
+
+
+def build_reference_pack_from_rows(
+    clean_segments_dir: Path,
+    rows: list[dict[str, Any]],
+    out_dir: Path,
+    target_total_sec: float | None = None,
+    selection_mode: str = "manual",
+) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    _clear_reference_outputs(out_dir)
     refs: list[dict[str, Any]] = []
     total = 0.0
     for row in rows:
-        if total >= target_total_sec and refs:
-            break
         source = Path(str(row["file"]))
         if not source.is_absolute():
             source = clean_segments_dir / source.name
@@ -52,13 +74,21 @@ def build_reference_pack(
         _concat_wavs([Path(ref["file"]) for ref in refs], combined)
     metadata = {
         "speaker": out_dir.parent.name,
-        "target_total_sec": target_total_sec,
+        "selection_mode": selection_mode,
+        "target_total_sec": target_total_sec if target_total_sec is not None else round(total, 3),
         "actual_total_sec": round(total, 3),
         "refs": refs,
         "combined_ref": str(combined) if refs else None,
     }
     write_json(out_dir / "reference_pack.json", metadata)
     return metadata
+
+
+def _clear_reference_outputs(out_dir: Path) -> None:
+    for old_ref in out_dir.glob("ref_*.wav"):
+        old_ref.unlink(missing_ok=True)
+    for old_file in (out_dir / "combined_ref.wav", out_dir / "reference_pack.json"):
+        old_file.unlink(missing_ok=True)
 
 
 def _concat_wavs(sources: list[Path], output: Path) -> None:
