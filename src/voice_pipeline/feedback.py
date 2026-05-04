@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from collections import Counter
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -83,27 +84,14 @@ def build_synthesis_review_csv(
         writer.writerow([category, metric, value, unit, notes])
 
     technical_rows = list(csv.DictReader(StringIO(technical_feedback_csv)))
-    wanted = {
-        ("settings", "backend"),
-        ("settings", "sample_rate"),
-        ("settings", "target_total_sec"),
-        ("settings", "reject_overlaps"),
-        ("segments", "raw_count"),
-        ("segments", "accepted_count"),
-        ("segments", "rejected_count"),
-        ("segments", "acceptance_rate"),
-        ("duration", "accepted_total"),
-        ("reference_pack", "ref_count"),
-        ("reference_pack", "actual_total_sec"),
-        ("synthesis", "output_file"),
-    }
-
     add("run", "speaker", speaker)
     add("run", "sample_wav", sample_wav)
+    add("run", "review_timestamp", datetime.now(timezone.utc).isoformat())
     for row in technical_rows:
-        key = (row.get("category", ""), row.get("metric", ""))
-        if key in wanted:
-            add(f"technical_{key[0]}", key[1], row.get("value", ""), row.get("unit", ""), row.get("notes", ""))
+        category = row.get("category", "")
+        metric = row.get("metric", "")
+        if category and metric:
+            add(f"technical_{category}", metric, row.get("value", ""), row.get("unit", ""), row.get("notes", ""))
     for key, value in review.items():
         add("human_review", key, value)
     return buffer.getvalue()

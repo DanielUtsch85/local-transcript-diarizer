@@ -71,6 +71,9 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             ),
         )
 
+    run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)
+    _render_pipeline_stepper(st, active_index=None, run_synthesis=run_synthesis)
+
     with st.form("voice-pipeline-settings"):
         speaker = st.selectbox("Zielsprecher", speakers)
         language = st.selectbox("Sprache", ["de", "en"], index=0)
@@ -84,7 +87,6 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             ),
         )
         consent_confirmed = st.checkbox("Explizite Einwilligung des Zielsprechers liegt vor")
-        run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)
         with st.expander("Pipeline-Parameter"):
             sample_rate = st.selectbox("Sample Rate", [24000, 16000], index=0)
             min_duration = st.number_input("Min. Segmentlaenge Sekunden", min_value=0.1, max_value=30.0, value=2.0)
@@ -235,19 +237,43 @@ def _run_pipeline_from_ui(
     rejected_dir = output_dir / "rejected_segments"
     manifests_dir = output_dir / "manifests"
 
+    started_at = time.monotonic()
+    stepper = st.empty()
+    current_step = {"index": None, "started_at": started_at}
+
+    def show_step(
+        index: int | None,
+        *,
+        failed_index: int | None = None,
+        completed: bool = False,
+        skipped_indices: set[int] | None = None,
+    ) -> None:
+        if index is not None and current_step["index"] != index and not completed and failed_index is None:
+            current_step["index"] = index
+            current_step["started_at"] = time.monotonic()
+        _render_pipeline_stepper(
+            stepper,
+            active_index=index,
+            failed_index=failed_index,
+            completed=completed,
+            overall_started_at=started_at,
+            step_started_at=current_step["started_at"] if index is not None else None,
+            skipped_indices=skipped_indices,
+            run_synthesis=run_synthesis,
+        )
+
+    show_step(0)
+
     with st.status("Voice-Pipeline laeuft...", expanded=True) as status:
-        started_at = time.monotonic()
-        stepper = st.empty()
         overall_progress = st.progress(0, text="Start")
         stage_detail = st.empty()
 
-        _render_pipeline_stepper(stepper, active_index=0)
         status.update(label="Audio vorbereiten")
         stage_detail.write("Audio wird vorbereitet.")
         prepare_audio(source_audio, prepared, sample_rate=sample_rate, mono=True)
         overall_progress.progress(10, text="Audio vorbereitet")
 
-        _render_pipeline_stepper(stepper, active_index=1)
+        show_step(1)
         status.update(label="Zielsprecher-Segmente schneiden")
         stage_detail.write("Diarization wird auf die vorbereitete WAV-Datei umgeschrieben.")
         rows_for_prepared = _rewrite_diarization_source(diarization_path, prepared, output_dir / "work" / "prepared_diarization.json")
@@ -272,6 +298,7 @@ def _run_pipeline_from_ui(
                 }
             )
             if index == 1 or index == len(selected) or index % 5 == 0:
+                show_step(1)
                 segment_progress.progress(
                     int(index / max(1, len(selected)) * 100),
                     text=f"Segmente schneiden: {index}/{len(selected)} ({_elapsed(started_at)})",
@@ -279,7 +306,7 @@ def _run_pipeline_from_ui(
         write_jsonl(manifests_dir / "raw_segments.jsonl", extracted)
         overall_progress.progress(35, text="Segmente geschnitten")
 
-        _render_pipeline_stepper(stepper, active_index=2)
+        show_step(2)
         status.update(label="Segmente bewerten")
         stage_detail.write("Segmente werden bewertet. Dieser Schritt nutzt VAD und ist meist der laengste Teil der Curation.")
         score_progress = st.progress(0, text=f"Qualitaet bewerten: 0/{len(extracted)}")
@@ -295,6 +322,7 @@ def _run_pipeline_from_ui(
                 )
             )
             if index == 1 or index == len(extracted) or index % 5 == 0:
+                show_step(2)
                 score_progress.progress(
                     int(index / max(1, len(extracted)) * 100),
                     text=f"Qualitaet bewerten: {index}/{len(extracted)} ({_elapsed(started_at)})",
@@ -302,7 +330,7 @@ def _run_pipeline_from_ui(
         write_jsonl(manifests_dir / "segments.jsonl", scored)
         overall_progress.progress(70, text="Segmente bewertet")
 
-        _render_pipeline_stepper(stepper, active_index=3)
+        show_step(3)
         status.update(label="Segmente kuratieren")
         stage_detail.write("Akzeptierte und abgelehnte Segmente werden getrennt.")
         accepted = [_copy_curated(row, clean_dir) for row in scored if row.get("accepted")]
@@ -312,7 +340,7 @@ def _run_pipeline_from_ui(
         _write_report(output_dir, accepted, rejected)
         overall_progress.progress(82, text="Curation geschrieben")
 
-        _render_pipeline_stepper(stepper, active_index=4)
+        show_step(4)
         status.update(label="Reference-Pack bauen")
         stage_detail.write("Reference-Pack wird gebaut.")
         reference = build_reference_pack(clean_dir, manifests_dir / "accepted.jsonl", output_dir / "voice_refs", target_total_sec=target_total_sec)
@@ -321,7 +349,7 @@ def _run_pipeline_from_ui(
         synth_metadata = None
         synthesis_error = None
         if run_synthesis:
-            _render_pipeline_stepper(stepper, active_index=5)
+            show_step(5)
             status.update(label="Synthese erzeugen")
             stage_detail.write(
                 "Synthetisches Sample wird erzeugt und geloggt. "
@@ -333,6 +361,7 @@ def _run_pipeline_from_ui(
             )
 
             def update_synthesis_countdown(elapsed_sec: int, remaining_sec: int) -> None:
+                show_step(5)
                 percent = int(min(100, max(0, elapsed_sec / max(1, synthesis_timeout_sec) * 100)))
                 synthesis_progress.progress(
                     percent,
@@ -403,7 +432,7 @@ def _run_pipeline_from_ui(
             f"{len(reference.get('refs', []))} Referenzen."
         )
         if synthesis_error:
-            _render_pipeline_stepper(stepper, active_index=5, failed_index=5)
+            show_step(5, failed_index=5)
             status.update(label="Reference-Pack fertig, Synthese fehlgeschlagen", state="error")
             st.warning(message)
             st.error(f"Synthese fehlgeschlagen: {synthesis_error}")
@@ -414,7 +443,7 @@ def _run_pipeline_from_ui(
                 label="Fehleranalyse als Voice-Feedback-CSV herunterladen",
             )
         else:
-            _render_pipeline_stepper(stepper, active_index=5, completed=True)
+            show_step(5 if run_synthesis else 4, completed=True, skipped_indices=set() if run_synthesis else {5})
             status.update(label="Voice-Pipeline fertig", state="complete")
             st.success(message)
 
@@ -441,16 +470,30 @@ def _format_countdown(total_sec: int) -> str:
 def _render_pipeline_stepper(
     container: Any,
     *,
-    active_index: int,
+    active_index: int | None,
     failed_index: int | None = None,
     completed: bool = False,
+    overall_started_at: float | None = None,
+    step_started_at: float | None = None,
+    skipped_indices: set[int] | None = None,
+    run_synthesis: bool = True,
 ) -> None:
+    skipped_indices = skipped_indices or set()
+    if not run_synthesis and not completed:
+        skipped_indices = set(skipped_indices) | {5}
+    overall_label = _elapsed(overall_started_at) if overall_started_at is not None else "bereit"
+    step_label = _elapsed(step_started_at) if step_started_at is not None else "noch nicht gestartet"
     items = []
     for index, (title, detail) in enumerate(_PIPELINE_STEPS):
-        if failed_index == index:
+        if index in skipped_indices:
+            state = "skipped"
+            state_label = "Uebersprungen"
+            timing = ""
+        elif failed_index == index:
             state = "failed"
             state_label = "Fehler"
-        elif completed or index < active_index:
+            timing = _elapsed(step_started_at) if step_started_at is not None else ""
+        elif completed or (active_index is not None and index < active_index):
             state = "done"
             state_label = "Fertig"
         elif index == active_index:
@@ -459,14 +502,26 @@ def _render_pipeline_stepper(
         else:
             state = "pending"
             state_label = "Wartet"
+            timing = ""
+        if index == active_index and step_started_at is not None:
+            timing = f"Schrittzeit {_elapsed(step_started_at)}"
+        elif state == "done":
+            timing = "abgeschlossen"
+        elif state == "pending":
+            timing = "ausstehend"
         items.append(
             f"""
-            <div class="vp-step vp-step-{state}">
-              <div class="vp-step-index">{index + 1}</div>
-              <div class="vp-step-copy">
-                <div class="vp-step-title">{title}</div>
-                <div class="vp-step-detail">{detail}</div>
-                <div class="vp-step-state">{state_label}</div>
+            <div class="vp-process-item">
+              <div class="vp-process-card vp-step-{state}">
+                <div class="vp-step-index">{index + 1}</div>
+                <div class="vp-step-copy">
+                  <div class="vp-step-title">{title}</div>
+                  <div class="vp-step-detail">{detail}</div>
+                  <div class="vp-step-meta">
+                    <span>{state_label}</span>
+                    <span>{timing}</span>
+                  </div>
+                </div>
               </div>
             </div>
             """
@@ -474,17 +529,66 @@ def _render_pipeline_stepper(
     container.markdown(
         f"""
         <style>
+          .vp-process-shell {{
+            border: 1px solid #dbe3ee;
+            border-radius: 8px;
+            padding: 14px;
+            margin: 14px 0 16px;
+            background: #ffffff;
+          }}
+          .vp-process-head {{
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+          }}
+          .vp-process-title {{
+            color: #0f172a;
+            font-size: 15px;
+            font-weight: 700;
+          }}
+          .vp-process-time {{
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            color: #475569;
+            font-size: 12px;
+          }}
+          .vp-process-time span {{
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            padding: 4px 9px;
+            background: #f8fafc;
+          }}
           .vp-stepper {{
             display: grid;
             grid-template-columns: repeat(6, minmax(0, 1fr));
-            gap: 8px;
-            margin: 8px 0 14px;
+            gap: 0;
+            align-items: stretch;
+            margin: 0;
           }}
-          .vp-step {{
+          .vp-process-item {{
+            position: relative;
+            padding: 0 6px;
+          }}
+          .vp-process-item:not(:last-child)::after {{
+            content: "";
+            position: absolute;
+            top: 23px;
+            right: -10px;
+            width: 20px;
+            height: 2px;
+            background: #cbd5e1;
+            z-index: 1;
+          }}
+          .vp-process-card {{
+            position: relative;
+            z-index: 2;
             border: 1px solid #d7dde7;
             border-radius: 8px;
             padding: 10px;
-            min-height: 104px;
+            min-height: 128px;
             background: #f8fafc;
           }}
           .vp-step-index {{
@@ -510,7 +614,10 @@ def _render_pipeline_stepper(
             line-height: 1.25;
             margin-top: 4px;
           }}
-          .vp-step-state {{
+          .vp-step-meta {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
             color: #475569;
             font-size: 11px;
             font-weight: 700;
@@ -542,13 +649,38 @@ def _render_pipeline_stepper(
             color: #ffffff;
             background: #dc2626;
           }}
+          .vp-step-skipped {{
+            border-color: #e2e8f0;
+            background: #f8fafc;
+          }}
+          .vp-step-skipped .vp-step-index {{
+            color: #64748b;
+            background: #e2e8f0;
+          }}
           @media (max-width: 900px) {{
             .vp-stepper {{
               grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 8px;
+            }}
+            .vp-process-item:not(:last-child)::after {{
+              display: none;
+            }}
+            .vp-process-head {{
+              align-items: flex-start;
+              flex-direction: column;
             }}
           }}
         </style>
-        <div class="vp-stepper">{''.join(items)}</div>
+        <div class="vp-process-shell">
+          <div class="vp-process-head">
+            <div class="vp-process-title">Voice-Pipeline Prozess</div>
+            <div class="vp-process-time">
+              <span>Gesamtzeit {overall_label}</span>
+              <span>Aktueller Schritt {step_label}</span>
+            </div>
+          </div>
+          <div class="vp-stepper">{''.join(items)}</div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -665,59 +797,71 @@ def _render_existing_outputs(output_dir: Path) -> None:
 def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_path: Path) -> None:
     if not technical_feedback_path.exists():
         return
-    with st.expander(f"Qualitaet bewerten: {wav.name}"):
-        cols = st.columns(2)
-        with cols[0]:
-            overall_quality = st.slider("Gesamtqualitaet", 1, 5, 3, key=f"{wav}-overall-quality")
-            voice_similarity = st.slider("Stimm-Aehnlichkeit", 1, 5, 3, key=f"{wav}-voice-similarity")
-            speaker_recognition = st.slider("Treffergenauigkeit Zielsprecher", 1, 5, 3, key=f"{wav}-speaker-recognition")
-        with cols[1]:
-            intelligibility = st.slider("Verstaendlichkeit", 1, 5, 3, key=f"{wav}-intelligibility")
-            naturalness = st.slider("Natuerlichkeit", 1, 5, 3, key=f"{wav}-naturalness")
-            artifact_level = st.slider("Artefakte/Stoerungen", 1, 5, 3, key=f"{wav}-artifact-level")
-        needs = st.multiselect(
-            "Was sollte optimiert werden?",
-            [
-                "mehr Referenzmaterial",
-                "weniger Referenzmaterial",
-                "strengere Segmentfilter",
-                "weniger Overlap-Ausschluss",
-                "anderer Synthese-Text",
-                "andere Sprache/Phonetik",
-                "Rauschen reduzieren",
-                "Lautstaerke/Normalisierung",
-                "anderes Backend",
-            ],
-            key=f"{wav}-needs",
-        )
-        notes = st.text_area("Notizen zur Stimme und Treffergenauigkeit", key=f"{wav}-review-notes")
-        review = {
-            "overall_quality_1_to_5": overall_quality,
-            "voice_similarity_1_to_5": voice_similarity,
-            "target_speaker_accuracy_1_to_5": speaker_recognition,
-            "intelligibility_1_to_5": intelligibility,
-            "naturalness_1_to_5": naturalness,
-            "artifact_level_1_to_5": artifact_level,
-            "optimization_needs": "; ".join(needs),
-            "notes": notes,
-        }
-        csv_text = build_synthesis_review_csv(
-            speaker=output_dir.name,
-            sample_wav=wav,
-            technical_feedback_csv=technical_feedback_path.read_text(encoding="utf-8"),
-            review=review,
-        )
-        review_path = output_dir / "manifests" / f"{wav.stem}-quality-review.csv"
-        if st.button("Bewertung speichern", key=f"{wav}-save-review"):
-            review_path.write_text(csv_text, encoding="utf-8")
-            st.success(f"Bewertung gespeichert: {review_path.name}")
-        st.download_button(
-            "Bewertungs-CSV herunterladen",
-            data=csv_text.encode("utf-8"),
-            file_name=f"{output_dir.name}-{wav.stem}-quality-review.csv",
-            mime="text/csv",
-            key=f"{wav}-download-review",
-        )
+    dialog_key = f"review-dialog-open-{wav}"
+    if st.button("Stimme bewerten", key=f"{wav}-open-review"):
+        st.session_state[dialog_key] = True
+    if st.session_state.get(dialog_key):
+        _render_synthesis_review_dialog(output_dir, wav, technical_feedback_path, dialog_key)
+
+
+@st.dialog("Stimme qualitativ bewerten")
+def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedback_path: Path, dialog_key: str) -> None:
+    st.audio(wav.read_bytes(), format="audio/wav")
+    cols = st.columns(2)
+    with cols[0]:
+        overall_quality = st.slider("Gesamtqualitaet", 1, 5, 3, key=f"{wav}-overall-quality")
+        voice_similarity = st.slider("Stimm-Aehnlichkeit", 1, 5, 3, key=f"{wav}-voice-similarity")
+        speaker_recognition = st.slider("Treffergenauigkeit Zielsprecher", 1, 5, 3, key=f"{wav}-speaker-recognition")
+    with cols[1]:
+        intelligibility = st.slider("Verstaendlichkeit", 1, 5, 3, key=f"{wav}-intelligibility")
+        naturalness = st.slider("Natuerlichkeit", 1, 5, 3, key=f"{wav}-naturalness")
+        artifact_level = st.slider("Artefakte/Stoerungen", 1, 5, 3, key=f"{wav}-artifact-level")
+    needs = st.multiselect(
+        "Was sollte optimiert werden?",
+        [
+            "mehr Referenzmaterial",
+            "weniger Referenzmaterial",
+            "strengere Segmentfilter",
+            "weniger Overlap-Ausschluss",
+            "anderer Synthese-Text",
+            "andere Sprache/Phonetik",
+            "Rauschen reduzieren",
+            "Lautstaerke/Normalisierung",
+            "anderes Backend",
+        ],
+        key=f"{wav}-needs",
+    )
+    notes = st.text_area("Notizen zur Stimme und Treffergenauigkeit", key=f"{wav}-review-notes")
+    review = {
+        "overall_quality_1_to_5": overall_quality,
+        "voice_similarity_1_to_5": voice_similarity,
+        "target_speaker_accuracy_1_to_5": speaker_recognition,
+        "intelligibility_1_to_5": intelligibility,
+        "naturalness_1_to_5": naturalness,
+        "artifact_level_1_to_5": artifact_level,
+        "optimization_needs": "; ".join(needs),
+        "notes": notes,
+    }
+    csv_text = build_synthesis_review_csv(
+        speaker=output_dir.name,
+        sample_wav=wav,
+        technical_feedback_csv=technical_feedback_path.read_text(encoding="utf-8"),
+        review=review,
+    )
+    review_path = output_dir / "manifests" / f"{wav.stem}-quality-review.csv"
+    review_path.write_text(csv_text, encoding="utf-8")
+    if st.download_button(
+        "Bewertungs-CSV herunterladen",
+        data=csv_text.encode("utf-8"),
+        file_name=f"{output_dir.name}-{wav.stem}-quality-review.csv",
+        mime="text/csv",
+        key=f"{wav}-download-review",
+    ):
+        st.session_state[dialog_key] = False
+        st.rerun()
+    if st.button("Schliessen", key=f"{wav}-close-review"):
+        st.session_state[dialog_key] = False
+        st.rerun()
 
 
 def _render_abort_control(output_dir: Path) -> None:
