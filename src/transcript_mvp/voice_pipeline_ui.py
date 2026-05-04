@@ -15,7 +15,7 @@ import streamlit as st
 from transcript_mvp.models import SpeakerSegment, TranscriptSegment
 from voice_pipeline.audio_io import cut_segment, prepare_audio
 from voice_pipeline.config import load_config
-from voice_pipeline.feedback import build_voice_feedback_csv
+from voice_pipeline.feedback import build_synthesis_review_csv, build_voice_feedback_csv
 from voice_pipeline.logging_utils import read_jsonl, write_jsonl
 from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
 from voice_pipeline.quality import score_segment, segment_overlap
@@ -74,7 +74,15 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
     with st.form("voice-pipeline-settings"):
         speaker = st.selectbox("Zielsprecher", speakers)
         language = st.selectbox("Sprache", ["de", "en"], index=0)
-        text = st.text_area("Synthese-Text", value="Hallo, dies ist ein synthetisch erzeugter Testsatz.")
+        text = st.text_area(
+            "Synthese-Text",
+            value=(
+                "Manchmal reicht ein einziger Moment, um alles zu verändern. "
+                "Die Frage ist nicht ob, sondern wann – und wie wir dann reagieren. "
+                "Ich glaube, dass wir alle nach denselben Dingen suchen: Verbindung, "
+                "Bedeutung und ein bisschen mehr Leichtigkeit."
+            ),
+        )
         consent_confirmed = st.checkbox("Explizite Einwilligung des Zielsprechers liegt vor")
         run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)
         with st.expander("Pipeline-Parameter"):
@@ -647,10 +655,69 @@ def _render_existing_outputs(output_dir: Path) -> None:
             if sidecar.exists():
                 with st.expander(f"Metadaten: {sidecar.name}"):
                     st.json(json.loads(sidecar.read_text(encoding="utf-8")))
+            _render_synthesis_review(output_dir, wav, feedback)
     report = output_dir / "report.md"
     if report.exists():
         with st.expander("Report"):
             st.markdown(report.read_text(encoding="utf-8"))
+
+
+def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_path: Path) -> None:
+    if not technical_feedback_path.exists():
+        return
+    with st.expander(f"Qualitaet bewerten: {wav.name}"):
+        cols = st.columns(2)
+        with cols[0]:
+            overall_quality = st.slider("Gesamtqualitaet", 1, 5, 3, key=f"{wav}-overall-quality")
+            voice_similarity = st.slider("Stimm-Aehnlichkeit", 1, 5, 3, key=f"{wav}-voice-similarity")
+            speaker_recognition = st.slider("Treffergenauigkeit Zielsprecher", 1, 5, 3, key=f"{wav}-speaker-recognition")
+        with cols[1]:
+            intelligibility = st.slider("Verstaendlichkeit", 1, 5, 3, key=f"{wav}-intelligibility")
+            naturalness = st.slider("Natuerlichkeit", 1, 5, 3, key=f"{wav}-naturalness")
+            artifact_level = st.slider("Artefakte/Stoerungen", 1, 5, 3, key=f"{wav}-artifact-level")
+        needs = st.multiselect(
+            "Was sollte optimiert werden?",
+            [
+                "mehr Referenzmaterial",
+                "weniger Referenzmaterial",
+                "strengere Segmentfilter",
+                "weniger Overlap-Ausschluss",
+                "anderer Synthese-Text",
+                "andere Sprache/Phonetik",
+                "Rauschen reduzieren",
+                "Lautstaerke/Normalisierung",
+                "anderes Backend",
+            ],
+            key=f"{wav}-needs",
+        )
+        notes = st.text_area("Notizen zur Stimme und Treffergenauigkeit", key=f"{wav}-review-notes")
+        review = {
+            "overall_quality_1_to_5": overall_quality,
+            "voice_similarity_1_to_5": voice_similarity,
+            "target_speaker_accuracy_1_to_5": speaker_recognition,
+            "intelligibility_1_to_5": intelligibility,
+            "naturalness_1_to_5": naturalness,
+            "artifact_level_1_to_5": artifact_level,
+            "optimization_needs": "; ".join(needs),
+            "notes": notes,
+        }
+        csv_text = build_synthesis_review_csv(
+            speaker=output_dir.name,
+            sample_wav=wav,
+            technical_feedback_csv=technical_feedback_path.read_text(encoding="utf-8"),
+            review=review,
+        )
+        review_path = output_dir / "manifests" / f"{wav.stem}-quality-review.csv"
+        if st.button("Bewertung speichern", key=f"{wav}-save-review"):
+            review_path.write_text(csv_text, encoding="utf-8")
+            st.success(f"Bewertung gespeichert: {review_path.name}")
+        st.download_button(
+            "Bewertungs-CSV herunterladen",
+            data=csv_text.encode("utf-8"),
+            file_name=f"{output_dir.name}-{wav.stem}-quality-review.csv",
+            mime="text/csv",
+            key=f"{wav}-download-review",
+        )
 
 
 def _render_abort_control(output_dir: Path) -> None:

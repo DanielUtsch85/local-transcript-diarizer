@@ -68,6 +68,47 @@ def build_voice_feedback_csv(
     return buffer.getvalue()
 
 
+def build_synthesis_review_csv(
+    *,
+    speaker: str,
+    sample_wav: Path | str,
+    technical_feedback_csv: str,
+    review: dict[str, Any],
+) -> str:
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["category", "metric", "value", "unit", "notes"])
+
+    def add(category: str, metric: str, value: Any, unit: str = "", notes: str = "") -> None:
+        writer.writerow([category, metric, value, unit, notes])
+
+    technical_rows = list(csv.DictReader(StringIO(technical_feedback_csv)))
+    wanted = {
+        ("settings", "backend"),
+        ("settings", "sample_rate"),
+        ("settings", "target_total_sec"),
+        ("settings", "reject_overlaps"),
+        ("segments", "raw_count"),
+        ("segments", "accepted_count"),
+        ("segments", "rejected_count"),
+        ("segments", "acceptance_rate"),
+        ("duration", "accepted_total"),
+        ("reference_pack", "ref_count"),
+        ("reference_pack", "actual_total_sec"),
+        ("synthesis", "output_file"),
+    }
+
+    add("run", "speaker", speaker)
+    add("run", "sample_wav", sample_wav)
+    for row in technical_rows:
+        key = (row.get("category", ""), row.get("metric", ""))
+        if key in wanted:
+            add(f"technical_{key[0]}", key[1], row.get("value", ""), row.get("unit", ""), row.get("notes", ""))
+    for key, value in review.items():
+        add("human_review", key, value)
+    return buffer.getvalue()
+
+
 def _ratio(part: int, total: int) -> float:
     return round(part / total, 4) if total else 0.0
 
