@@ -58,21 +58,22 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         st.warning("Keine Sprechersegmente gefunden.")
         return
 
+    backend = st.selectbox("Synthese-Backend", ["mock", "xtts", "openvoice"], index=0)
+    if backend != "mock":
+        st.caption(_backend_hint(backend))
+    xtts_license_confirmed = False
+    if backend == "xtts":
+        xtts_license_confirmed = st.checkbox(
+            "Coqui/XTTS Lizenzbedingungen sind fuer diesen Einsatz geprueft und akzeptiert",
+            help=(
+                "XTTS-v2 fragt beim ersten Modell-Download nach einer Coqui-Lizenzbestaetigung. "
+                "Diese Checkbox setzt COQUI_TOS_AGREED=1 nur fuer den isolierten XTTS-Prozess."
+            ),
+        )
+
     with st.form("voice-pipeline-settings"):
         speaker = st.selectbox("Zielsprecher", speakers)
         language = st.selectbox("Sprache", ["de", "en"], index=0)
-        backend = st.selectbox("Synthese-Backend", ["mock", "xtts", "openvoice"], index=0)
-        if backend != "mock":
-            st.caption(_backend_hint(backend))
-        xtts_license_confirmed = False
-        if backend == "xtts":
-            xtts_license_confirmed = st.checkbox(
-                "Coqui/XTTS Lizenzbedingungen sind fuer diesen Einsatz geprueft und akzeptiert",
-                help=(
-                    "XTTS-v2 fragt beim ersten Modell-Download nach einer Coqui-Lizenzbestaetigung. "
-                    "Diese Checkbox setzt COQUI_TOS_AGREED=1 nur fuer den isolierten XTTS-Prozess."
-                ),
-            )
         text = st.text_area("Synthese-Text", value="Hallo, dies ist ein synthetisch erzeugter Testsatz.")
         consent_confirmed = st.checkbox("Explizite Einwilligung des Zielsprechers liegt vor")
         run_synthesis = st.checkbox("Nach Reference-Pack direkt Synthese erzeugen", value=False)

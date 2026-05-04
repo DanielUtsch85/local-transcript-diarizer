@@ -64,7 +64,11 @@ class XTTSBackend(SynthesisBackend):
         stderr = ""
         try:
             env = os.environ.copy()
-            env.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib"))
+            cache_dir = _repo_root() / "data" / "work" / "xtts_cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            env.setdefault("HF_HOME", str(cache_dir / "huggingface"))
+            env.setdefault("XDG_CACHE_HOME", str(cache_dir / "xdg"))
+            env.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
             env["COQUI_TOS_AGREED"] = "1"
             process = subprocess.Popen(
                 [str(python), str(runner), "--request", str(request_path)],
@@ -78,7 +82,7 @@ class XTTSBackend(SynthesisBackend):
                 self.pid_file.write_text(str(process.pid), encoding="utf-8")
             stdout, stderr = self._communicate_with_countdown(process)
         except subprocess.TimeoutExpired as exc:
-            details = "\n".join(_as_text(part) for part in [exc.stdout, exc.stderr] if part).strip()
+            details = _process_details(exc.stdout, exc.stderr)
             suffix = f": {details}" if details else ""
             raise RuntimeError(f"XTTS synthesis timed out after {self.timeout_sec} seconds{suffix}") from exc
         finally:
@@ -86,7 +90,7 @@ class XTTSBackend(SynthesisBackend):
             if self.pid_file:
                 self.pid_file.unlink(missing_ok=True)
         if process is not None and process.returncode != 0:
-            details = (stderr or stdout).strip() or f"process exited with code {process.returncode}"
+            details = _process_details(stderr, stdout) or f"process exited with code {process.returncode}"
             raise RuntimeError(f"XTTS synthesis failed in isolated environment: {details}")
         return output_wav
 
@@ -106,9 +110,7 @@ class XTTSBackend(SynthesisBackend):
                 if time.monotonic() - started_at >= self.timeout_sec:
                     process.kill()
                     stdout, stderr = process.communicate()
-                    details = "\n".join(
-                        _as_text(part) for part in [exc.stdout, exc.stderr, stdout, stderr] if part
-                    ).strip()
+                    details = _process_details(exc.stdout, exc.stderr, stdout, stderr)
                     suffix = f": {details}" if details else ""
                     raise RuntimeError(f"XTTS synthesis timed out after {self.timeout_sec} seconds{suffix}") from exc
 
@@ -133,3 +135,22 @@ def _as_text(value: str | bytes) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _process_details(*parts: str | bytes | None, max_chars: int = 12000) -> str:
+    text = "\n".join(_as_text(part) for part in parts if part).replace("\r", "\n")
+    lines = [line for line in text.splitlines() if line.strip()]
+    filtered = [
+        line
+        for line in lines
+        if not (
+            "it/s" in line
+            or "iB/s" in line
+            or line.lstrip().startswith(("0%|", "1%|", "2%|", "3%|", "4%|", "5%|", "6%|", "7%|", "8%|", "9%|"))
+            or line.lstrip().startswith(tuple(f"{value}%|" for value in range(10, 101)))
+        )
+    ]
+    cleaned = "\n".join(filtered).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return "[process output truncated]\n" + cleaned[-max_chars:]
