@@ -1,7 +1,7 @@
 import json
 import shutil
 
-from voice_pipeline.audio_io import create_dummy_wav, cut_segment
+from voice_pipeline.audio_io import create_dummy_wav, cut_segment, denoise_wav
 from voice_pipeline.logging_utils import read_jsonl, write_jsonl
 from voice_pipeline.quality import score_segment
 from voice_pipeline.segment_loader import filter_segments, load_segments, segment_filename
@@ -30,3 +30,13 @@ def test_minimal_curation_flow(tmp_path):
     assert dest.exists()
     assert rows[0]["speaker"] == "SPEAKER_02"
     assert "accepted" in rows[0]
+
+
+def test_denoise_wav_creates_reference_copy(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        return
+    source = create_dummy_wav(tmp_path / "source.wav", duration_sec=1.0, sample_rate=24000, tone_hz=440)
+    output = denoise_wav(source, tmp_path / "denoised" / "source.wav", noise_reduction_db=8)
+
+    assert output.exists()
+    assert output.stat().st_size > 0

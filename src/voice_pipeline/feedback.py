@@ -60,6 +60,11 @@ def build_voice_feedback_csv(
         add("reference_pack", "ref_count", len(refs), "files")
         add("reference_pack", "target_total_sec", reference_metadata.get("target_total_sec", 0), "seconds")
         add("reference_pack", "actual_total_sec", reference_metadata.get("actual_total_sec", 0), "seconds")
+        if "selection_mode" in reference_metadata:
+            add("reference_pack", "selection_mode", reference_metadata.get("selection_mode", ""))
+        if "denoise_enabled" in reference_metadata:
+            add("reference_pack", "denoise_enabled", reference_metadata.get("denoise_enabled", ""))
+            add("reference_pack", "denoise_strength_db", reference_metadata.get("denoise_strength_db", 0), "dB")
     if synthesis_metadata:
         add("synthesis", "backend", synthesis_metadata.get("backend", ""))
         add("synthesis", "synthetic", synthesis_metadata.get("synthetic", ""))

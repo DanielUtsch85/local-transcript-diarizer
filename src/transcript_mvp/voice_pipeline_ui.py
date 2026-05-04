@@ -14,10 +14,10 @@ import pandas as pd
 import streamlit as st
 
 from transcript_mvp.models import SpeakerSegment, TranscriptSegment
-from voice_pipeline.audio_io import cut_segment, prepare_audio
+from voice_pipeline.audio_io import cut_segment, denoise_wav, prepare_audio
 from voice_pipeline.config import load_config
 from voice_pipeline.feedback import build_synthesis_review_csv, build_voice_feedback_csv
-from voice_pipeline.logging_utils import read_jsonl, write_jsonl
+from voice_pipeline.logging_utils import read_jsonl, write_json, write_jsonl
 from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
 from voice_pipeline.quality import score_segment, segment_overlap
 from voice_pipeline.reference_pack import build_reference_pack, build_reference_pack_from_rows
@@ -203,6 +203,26 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
                     "mehr Headroom und koennen harte, ueberlaute Referenzen vermeiden."
                 ),
             )
+            denoise_references = st.checkbox(
+                "Reference-Clips entrauschen",
+                value=False,
+                help=(
+                    "Erzeugt vor dem Reference-Pack eine entrauschte Kopie der akzeptierten Clips. Das kann konstantes "
+                    "Mikrofonknistern reduzieren, kann bei zu starker Einstellung aber Klangfarbe und Sprecheridentitaet verfälschen."
+                ),
+            )
+            denoise_strength_db = st.slider(
+                "Denoise-Staerke dB",
+                min_value=0.0,
+                max_value=30.0,
+                value=12.0,
+                step=1.0,
+                help=(
+                    "Staerke des ffmpeg-afftdn Filters. 8-12 dB ist ein konservativer Start; hoehere Werte entfernen mehr Rauschen, "
+                    "koennen aber metallische Artefakte erzeugen."
+                ),
+                disabled=not denoise_references,
+            )
             synthesis_timeout_min = st.number_input(
                 "Synthese automatisch abbrechen nach Minuten",
                 min_value=1,
@@ -263,6 +283,8 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
             max_clipping_ratio=float(max_clipping_ratio),
             min_rms_db=float(min_rms_db),
             max_peak_db=float(max_peak_db),
+            denoise_references=denoise_references,
+            denoise_strength_db=float(denoise_strength_db),
             reject_overlaps=reject_overlaps,
             run_synthesis=run_synthesis,
             backend=backend,
@@ -281,6 +303,8 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         consent_confirmed=consent_confirmed,
         synthesis_timeout_sec=int(synthesis_timeout_min) * 60,
         xtts_license_confirmed=xtts_license_confirmed,
+        denoise_references=denoise_references,
+        denoise_strength_db=float(denoise_strength_db),
     )
 
 
@@ -360,6 +384,8 @@ def _run_pipeline_from_ui(
     max_clipping_ratio: float,
     min_rms_db: float,
     max_peak_db: float,
+    denoise_references: bool,
+    denoise_strength_db: float,
     reject_overlaps: bool,
     run_synthesis: bool,
     backend: str,
@@ -501,14 +527,23 @@ def _run_pipeline_from_ui(
         show_step(4)
         status.update(label="Reference-Pack bauen")
         stage_detail.write("Reference-Pack wird gebaut.")
+        reference_rows = _prepare_reference_rows(
+            accepted,
+            output_dir=output_dir,
+            denoise_references=denoise_references,
+            denoise_strength_db=denoise_strength_db,
+        )
         reference = build_reference_pack(
-            clean_dir,
-            manifests_dir / "accepted.jsonl",
+            output_dir / ("denoised_segments" if denoise_references else "clean_segments"),
+            _write_reference_source_manifest(manifests_dir / "reference_source.jsonl", reference_rows),
             output_dir / "voice_refs",
             target_total_sec=target_total_sec,
             preferred_min_duration_sec=preferred_min_duration_sec,
             preferred_max_duration_sec=preferred_max_duration_sec,
         )
+        reference["denoise_enabled"] = denoise_references
+        reference["denoise_strength_db"] = denoise_strength_db if denoise_references else 0.0
+        write_json(output_dir / "voice_refs" / "reference_pack.json", reference)
         overall_progress.progress(90, text="Reference-Pack gebaut")
 
         synth_metadata = None
@@ -583,6 +618,8 @@ def _run_pipeline_from_ui(
                 "max_clipping_ratio": max_clipping_ratio,
                 "min_rms_db": min_rms_db,
                 "max_peak_db": max_peak_db,
+                "denoise_references": denoise_references,
+                "denoise_strength_db": denoise_strength_db if denoise_references else 0.0,
                 "reject_overlaps": reject_overlaps,
                 "backend": backend,
                 "run_synthesis": run_synthesis,
@@ -815,6 +852,8 @@ def _render_existing_outputs(
     consent_confirmed: bool,
     synthesis_timeout_sec: int,
     xtts_license_confirmed: bool,
+    denoise_references: bool,
+    denoise_strength_db: float,
 ) -> None:
     manifests = output_dir / "manifests"
     accepted_path = manifests / "accepted.jsonl"
@@ -844,7 +883,12 @@ def _render_existing_outputs(
     if accepted:
         with st.expander("Akzeptierte Segmente anzeigen"):
             st.dataframe(pd.DataFrame(accepted), use_container_width=True, height=320)
-        _render_manual_reference_builder(output_dir, accepted)
+        _render_manual_reference_builder(
+            output_dir,
+            accepted,
+            denoise_references=denoise_references,
+            denoise_strength_db=denoise_strength_db,
+        )
     _render_reference_synthesis_controls(
         output_dir,
         backend=backend,
@@ -898,7 +942,13 @@ def _manual_reference_key(output_dir: Path) -> str:
     return f"voice-pipeline-manual-refs:{output_dir.resolve()}"
 
 
-def _render_manual_reference_builder(output_dir: Path, accepted: list[dict[str, Any]]) -> None:
+def _render_manual_reference_builder(
+    output_dir: Path,
+    accepted: list[dict[str, Any]],
+    *,
+    denoise_references: bool,
+    denoise_strength_db: float,
+) -> None:
     candidates = sorted(accepted, key=_reference_candidate_score, reverse=True)
     if not candidates:
         return
@@ -952,14 +1002,23 @@ def _render_manual_reference_builder(output_dir: Path, accepted: list[dict[str, 
         metric_cols[1].metric("Dauer", f"{selected_total:.1f}s")
         metric_cols[2].metric("Kandidaten", len(candidates))
         if st.button("Auswahl als Reference-Pack verwenden", disabled=not selected_rows, type="secondary"):
-            metadata = build_reference_pack_from_rows(
-                output_dir / "clean_segments",
+            reference_rows = _prepare_reference_rows(
                 selected_rows,
+                output_dir=output_dir,
+                denoise_references=denoise_references,
+                denoise_strength_db=denoise_strength_db,
+            )
+            metadata = build_reference_pack_from_rows(
+                output_dir / ("denoised_segments" if denoise_references else "clean_segments"),
+                reference_rows,
                 output_dir / "voice_refs",
                 target_total_sec=round(selected_total, 3),
                 selection_mode="manual",
             )
-            write_jsonl(output_dir / "manifests" / "manual_reference_selection.jsonl", selected_rows)
+            metadata["denoise_enabled"] = denoise_references
+            metadata["denoise_strength_db"] = denoise_strength_db if denoise_references else 0.0
+            write_json(output_dir / "voice_refs" / "reference_pack.json", metadata)
+            write_jsonl(output_dir / "manifests" / "manual_reference_selection.jsonl", reference_rows)
             st.session_state[_current_sample_key(output_dir)] = []
             st.success(
                 f"Manuelles Reference-Pack gespeichert: {len(metadata.get('refs', []))} Clips, "
@@ -1072,6 +1131,37 @@ def _default_reference_selection(rows: list[dict[str, Any]], target_total_sec: f
 
 def _selected_reference_rows(rows: list[dict[str, Any]], selected_files: set[str]) -> list[dict[str, Any]]:
     return [row for row in rows if str(Path(str(row.get("file", "")))) in selected_files]
+
+
+def _prepare_reference_rows(
+    rows: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    denoise_references: bool,
+    denoise_strength_db: float,
+) -> list[dict[str, Any]]:
+    if not denoise_references:
+        return [dict(row, denoise_enabled=False, denoise_strength_db=0.0) for row in rows]
+    denoised_dir = output_dir / "denoised_segments"
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        source = Path(str(row["file"]))
+        if not source.exists():
+            continue
+        target = denoised_dir / source.name
+        denoise_wav(source, target, noise_reduction_db=denoise_strength_db)
+        updated = dict(row)
+        updated["file"] = str(target)
+        updated["denoise_enabled"] = True
+        updated["denoise_strength_db"] = denoise_strength_db
+        updated["denoise_source_file"] = str(source)
+        prepared.append(updated)
+    return prepared
+
+
+def _write_reference_source_manifest(path: Path, rows: list[dict[str, Any]]) -> Path:
+    write_jsonl(path, rows)
+    return path
 
 
 def _reference_candidate_score(row: dict[str, Any]) -> float:

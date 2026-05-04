@@ -97,6 +97,26 @@ def cut_segment(
     return output_file
 
 
+def denoise_wav(input_path: Path, output_path: Path, noise_reduction_db: float = 12.0) -> Path:
+    """Apply a conservative ffmpeg frequency-domain denoise filter to a WAV file."""
+    require_ffmpeg()
+    noise_reduction_db = max(0.0, min(float(noise_reduction_db), 30.0))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-af",
+        f"afftdn=nr={noise_reduction_db:.1f}",
+        "-c:a",
+        "pcm_s16le",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return output_path
+
+
 def read_wav_mono(path: Path) -> tuple[np.ndarray, int]:
     with wave.open(str(path), "rb") as handle:
         channels = handle.getnchannels()

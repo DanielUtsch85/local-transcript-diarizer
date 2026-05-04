@@ -27,8 +27,9 @@ class OpenVoiceBackend(SynthesisBackend):
             import openvoice  # type: ignore  # noqa: F401
         except ImportError as exc:
             raise RuntimeError(
-                "Install OpenVoice V2 and configure checkpoints to use the openvoice backend"
+                "OpenVoice V2 is not installed in this environment. Install OpenVoice V2 separately, "
+                "provide the required checkpoints, and configure the OpenVoice adapter before using this backend."
             ) from exc
         raise NotImplementedError(
-            "OpenVoice V2 is detected, but checkpoint-specific synthesis wiring must be configured"
+            "OpenVoice V2 is installed, but checkpoint-specific synthesis wiring is not configured yet."
         )
