@@ -1,7 +1,7 @@
 import json
 
 from transcript_mvp.exports import build_diarization_json, build_diarization_jsonl
-from transcript_mvp.models import SpeakerSegment, TranscriptSegment
+from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment
 
 
 def test_build_diarization_json_matches_voice_pipeline_schema():
@@ -54,3 +54,31 @@ def test_build_diarization_json_accepts_raw_speaker_segments():
     assert len(rows) == 2
     assert rows[0]["speaker"] == "SPEAKER_00"
     assert rows[0]["start"] == 0.1
+
+
+def test_build_diarization_json_applies_speaker_mapping():
+    payload = build_diarization_json(
+        [
+            SpeakerSegment(start=0.1, end=1.5, speaker="SPEAKER_UNKNOWN"),
+        ],
+        "/tmp/interview.wav",
+        SpeakerMapping({"SPEAKER_UNKNOWN": "daniel"}),
+    )
+
+    rows = json.loads(payload)
+
+    assert rows[0]["speaker"] == "daniel"
+
+
+def test_build_diarization_jsonl_applies_speaker_mapping():
+    payload = build_diarization_jsonl(
+        [
+            TranscriptSegment(start=0.1, end=1.5, speaker="SPEAKER_UNKNOWN", text="Hallo"),
+        ],
+        "/tmp/interview.wav",
+        SpeakerMapping({"SPEAKER_UNKNOWN": "daniel"}),
+    )
+
+    rows = [json.loads(line) for line in payload.splitlines()]
+
+    assert rows[0]["speaker"] == "daniel"

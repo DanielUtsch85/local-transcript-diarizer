@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 from typing import Any
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -155,6 +154,8 @@ def append_resource_history(
 def render_resource_history(history: ResourceHistory | list[dict[str, float | int]]) -> None:
     if len(history) < 2:
         return
+    import altair as alt
+
     frame = pd.DataFrame(list(history)).drop_duplicates(subset=["Zeit"], keep="last")
     st.markdown("**Verlauf**")
     system_frame = frame[["Zeit", "CPU gesamt %", "RAM gesamt %", "Speicherdruck %"]].melt(
@@ -631,8 +632,8 @@ with right:
         last_audio_path = st.session_state.get("last_audio_path")
         if last_audio_path:
             diarization_source = st.session_state.speaker_segments or st.session_state.segments
-            diarization_json = build_diarization_json(diarization_source, last_audio_path)
-            diarization_jsonl = build_diarization_jsonl(diarization_source, last_audio_path)
+            diarization_json = build_diarization_json(diarization_source, last_audio_path, mapping)
+            diarization_jsonl = build_diarization_jsonl(diarization_source, last_audio_path, mapping)
             st.download_button(
                 "Diarization JSON herunterladen",
                 data=diarization_json.encode("utf-8"),

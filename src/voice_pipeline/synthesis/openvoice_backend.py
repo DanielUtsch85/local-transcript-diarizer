@@ -24,12 +24,14 @@ class OpenVoiceBackend(SynthesisBackend):
         timeout_sec: int = 30 * 60,
         pid_file: Path | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        log_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.checkpoint_dir = checkpoint_dir
         self.python_path = python_path
         self.timeout_sec = timeout_sec
         self.pid_file = pid_file
         self.progress_callback = progress_callback
+        self.log_callback = log_callback
 
     def synthesize(
         self,
@@ -66,8 +68,8 @@ class OpenVoiceBackend(SynthesisBackend):
             json.dump(payload, handle, ensure_ascii=False)
             request_path = Path(handle.name)
         process: subprocess.Popen[str] | None = None
-        stdout = ""
-        stderr = ""
+        log_output = ""
+        log_path = _openvoice_work_dir(output_wav) / "openvoice_synthesis.log"
         try:
             env = os.environ.copy()
             cache_dir = _repo_root() / "data" / "work" / "openvoice_cache"
@@ -75,45 +77,74 @@ class OpenVoiceBackend(SynthesisBackend):
             env.setdefault("HF_HOME", str(cache_dir / "huggingface"))
             env.setdefault("XDG_CACHE_HOME", str(cache_dir / "xdg"))
             env.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
-            process = subprocess.Popen(
-                [str(python), str(runner), "--request", str(request_path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-            )
-            if self.pid_file:
-                self.pid_file.parent.mkdir(parents=True, exist_ok=True)
-                self.pid_file.write_text(str(process.pid), encoding="utf-8")
-            stdout, stderr = self._communicate_with_countdown(process)
+            env["PYTHONUNBUFFERED"] = "1"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("w", encoding="utf-8") as log_handle:
+                log_handle.write(f"[openvoice] log={log_path}\n")
+                log_handle.flush()
+                process = subprocess.Popen(
+                    [str(python), str(runner), "--request", str(request_path)],
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    bufsize=1,
+                )
+                if self.pid_file:
+                    self.pid_file.parent.mkdir(parents=True, exist_ok=True)
+                    self.pid_file.write_text(str(process.pid), encoding="utf-8")
+                log_output = self._wait_with_countdown(process, log_path)
         finally:
             request_path.unlink(missing_ok=True)
             if self.pid_file:
                 self.pid_file.unlink(missing_ok=True)
         if process is not None and process.returncode != 0:
-            details = _process_details(stderr, stdout) or f"process exited with code {process.returncode}"
+            details = _process_details(log_output) or f"process exited with code {process.returncode}"
             raise RuntimeError(f"OpenVoice synthesis failed in isolated environment: {details}")
+        if not output_wav.exists() or output_wav.stat().st_size == 0:
+            details = _process_details(log_output)
+            suffix = f": {details}" if details else ""
+            raise RuntimeError(f"OpenVoice synthesis did not create an output WAV{suffix}")
         return output_wav
 
-    def _communicate_with_countdown(self, process: subprocess.Popen[str]) -> tuple[str, str]:
+    def _wait_with_countdown(self, process: subprocess.Popen[str], log_path: Path) -> str:
         started_at = time.monotonic()
-        stdout = ""
-        stderr = ""
-        while True:
+        offset = 0
+        while process.poll() is None:
             elapsed = int(time.monotonic() - started_at)
             remaining = max(0, int(self.timeout_sec - elapsed))
             if self.progress_callback:
                 self.progress_callback(elapsed, remaining)
-            try:
-                stdout, stderr = process.communicate(timeout=min(1, max(remaining, 1)))
-                return stdout, stderr
-            except subprocess.TimeoutExpired as exc:
-                if time.monotonic() - started_at >= self.timeout_sec:
+            offset = self._read_new_log(log_path, offset)
+            if time.monotonic() - started_at >= self.timeout_sec:
+                try:
                     process.kill()
-                    stdout, stderr = process.communicate()
-                    details = _process_details(exc.stdout, exc.stderr, stdout, stderr)
-                    suffix = f": {details}" if details else ""
-                    raise RuntimeError(f"OpenVoice synthesis timed out after {self.timeout_sec} seconds{suffix}") from exc
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+                offset = self._read_new_log(log_path, offset)
+                details = _process_details(_read_log_text(log_path))
+                suffix = f": {details}" if details else ""
+                raise RuntimeError(f"OpenVoice synthesis timed out after {self.timeout_sec} seconds{suffix}")
+            time.sleep(1)
+        self._read_new_log(log_path, offset)
+        return _read_log_text(log_path)
+
+    def _read_new_log(self, log_path: Path, offset: int) -> int:
+        if not log_path.exists():
+            return offset
+        try:
+            with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                chunk = handle.read()
+                new_offset = handle.tell()
+        except OSError:
+            return offset
+        if chunk and self.log_callback:
+            for line in chunk.splitlines():
+                if line.strip():
+                    self.log_callback(line)
+        return new_offset
 
     def _resolve_python(self) -> Path:
         env_python = os.environ.get("OPENVOICE_PYTHON")
@@ -151,6 +182,12 @@ def _openvoice_reference(reference_wavs: Sequence[Path], output_wav: Path) -> Pa
     return Path(reference_wavs[0])
 
 
+def _openvoice_work_dir(output_wav: Path) -> Path:
+    if output_wav.parent.name == "generated_samples":
+        return output_wav.parent.parent / "work"
+    return output_wav.parent / "work"
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -159,6 +196,12 @@ def _as_text(value: str | bytes) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _read_log_text(log_path: Path) -> str:
+    if not log_path.exists():
+        return ""
+    return log_path.read_text(encoding="utf-8", errors="replace")
 
 
 def _process_details(*parts: str | bytes | None, max_chars: int = 12000) -> str:

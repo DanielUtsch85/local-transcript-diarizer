@@ -63,21 +63,33 @@ def build_html(segments: list[TranscriptSegment], mapping: SpeakerMapping, title
 """
 
 
-def build_diarization_json(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> str:
-    rows = _diarization_rows(segments, source_file)
+def build_diarization_json(
+    segments: list[TranscriptSegment] | list[SpeakerSegment],
+    source_file: str | Path,
+    mapping: SpeakerMapping | None = None,
+) -> str:
+    rows = _diarization_rows(segments, source_file, mapping)
     return json.dumps(rows, ensure_ascii=False, indent=2) + "\n"
 
 
-def build_diarization_jsonl(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> str:
-    rows = _diarization_rows(segments, source_file)
+def build_diarization_jsonl(
+    segments: list[TranscriptSegment] | list[SpeakerSegment],
+    source_file: str | Path,
+    mapping: SpeakerMapping | None = None,
+) -> str:
+    rows = _diarization_rows(segments, source_file, mapping)
     return "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
 
 
-def _diarization_rows(segments: list[TranscriptSegment] | list[SpeakerSegment], source_file: str | Path) -> list[dict]:
+def _diarization_rows(
+    segments: list[TranscriptSegment] | list[SpeakerSegment],
+    source_file: str | Path,
+    mapping: SpeakerMapping | None,
+) -> list[dict]:
     source = str(source_file)
     return [
         {
-            "speaker": segment.speaker,
+            "speaker": mapping.label_for(segment.speaker) if mapping else segment.speaker,
             "start": float(segment.start),
             "end": float(segment.end),
             "source_file": source,

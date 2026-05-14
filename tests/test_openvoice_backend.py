@@ -43,26 +43,39 @@ def test_openvoice_backend_times_out(tmp_path, monkeypatch):
     (checkpoint_dir / "base_speakers" / "ses").mkdir(parents=True)
     (checkpoint_dir / "converter" / "config.json").write_text("{}", encoding="utf-8")
     (checkpoint_dir / "converter" / "checkpoint.pth").write_bytes(b"checkpoint")
-    backend = OpenVoiceBackend(python_path=python, checkpoint_dir=checkpoint_dir, timeout_sec=0)
+    log_lines: list[str] = []
+    backend = OpenVoiceBackend(
+        python_path=python,
+        checkpoint_dir=checkpoint_dir,
+        timeout_sec=0,
+        log_callback=log_lines.append,
+    )
 
     class FakeProcess:
         pid = 1234
         returncode = None
 
-        def __init__(self):
-            self.calls = 0
+        def poll(self):
+            return self.returncode
 
-        def communicate(self, timeout=None):
-            self.calls += 1
-            if self.calls == 1:
-                raise subprocess.TimeoutExpired(cmd=["openvoice"], timeout=timeout)
-            self.returncode = -9
-            return "", ""
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = -9
+            return self.returncode
 
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    def fake_popen(*args, **kwargs):
+        kwargs["stdout"].write("[openvoice] loading MeloTTS\n")
+        kwargs["stdout"].flush()
+        return FakeProcess()
 
-    with pytest.raises(RuntimeError, match="timed out after 0 seconds"):
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(RuntimeError, match="loading MeloTTS"):
         backend.synthesize("Hello", [Path("ref.wav")], tmp_path / "out.wav", language="en")
+    assert log_lines == [
+        f"[openvoice] log={tmp_path / 'work' / 'openvoice_synthesis.log'}",
+        "[openvoice] loading MeloTTS",
+    ]

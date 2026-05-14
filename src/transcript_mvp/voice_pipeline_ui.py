@@ -238,7 +238,7 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
                 "Synthese automatisch abbrechen nach Minuten",
                 min_value=1,
                 max_value=180,
-                value=45 if backend == "openvoice" else 30,
+                value=15 if backend == "openvoice" else 30,
                 help=(
                     "Hat keinen Klangvorteil, schuetzt aber vor haengenden Modellprozessen. Wenn der Abbruch greift, "
                     "bleiben Referenzdaten und Fehleranalyse erhalten, aber es entsteht kein vollstaendiges Sample."
@@ -581,6 +581,8 @@ def _run_pipeline_from_ui(
                 0,
                 text=f"Synthese gestartet. Automatischer Abbruch in {_format_countdown(synthesis_timeout_sec)}.",
             )
+            synthesis_log_box = st.empty()
+            append_synthesis_log = _make_synthesis_log_callback(synthesis_log_box)
 
             def update_synthesis_countdown(elapsed_sec: int, remaining_sec: int) -> None:
                 show_step(5)
@@ -606,6 +608,7 @@ def _run_pipeline_from_ui(
                         pid_file=output_dir / "work" / "synthesis.pid",
                         xtts_license_confirmed=xtts_license_confirmed,
                         progress_callback=update_synthesis_countdown,
+                        log_callback=append_synthesis_log,
                     ).synthesize(
                         text,
                         reference_files,
@@ -702,6 +705,16 @@ def _format_countdown(total_sec: int) -> str:
     if minutes:
         return f"{minutes}m {seconds:02d}s"
     return f"{seconds}s"
+
+
+def _make_synthesis_log_callback(container: Any, max_lines: int = 80) -> Callable[[str], None]:
+    lines: list[str] = []
+
+    def append(line: str) -> None:
+        lines.append(line)
+        container.code("\n".join(lines[-max_lines:]), language="text")
+
+    return append
 
 
 def _render_pipeline_stepper(
@@ -1098,6 +1111,8 @@ def _synthesize_reference_pack_from_ui(
         st.error(str(exc))
         return
     progress = st.progress(0, text=f"Synthese gestartet. Automatischer Abbruch in {_format_countdown(synthesis_timeout_sec)}.")
+    synthesis_log_box = st.empty()
+    append_synthesis_log = _make_synthesis_log_callback(synthesis_log_box)
 
     def update_synthesis_countdown(elapsed_sec: int, remaining_sec: int) -> None:
         percent = int(min(100, max(0, elapsed_sec / max(1, synthesis_timeout_sec) * 100)))
@@ -1111,6 +1126,7 @@ def _synthesize_reference_pack_from_ui(
             pid_file=output_dir / "work" / "synthesis.pid",
             xtts_license_confirmed=xtts_license_confirmed,
             progress_callback=update_synthesis_countdown,
+            log_callback=append_synthesis_log,
         ).synthesize(text, reference_files, output_wav, language=language)
     except (RuntimeError, NotImplementedError, ValueError) as exc:
         progress.progress(100, text="Synthese abgebrochen oder fehlgeschlagen.")
@@ -1331,13 +1347,13 @@ def _render_abort_control(output_dir: Path) -> None:
     if not raw_pid.isdigit():
         pid_file.unlink(missing_ok=True)
         return
-    st.warning(f"XTTS-Synthese laeuft noch mit Prozess-ID {raw_pid}.")
-    if st.button("XTTS-Synthese abbrechen", type="secondary"):
+    st.warning(f"Synthese laeuft noch mit Prozess-ID {raw_pid}.")
+    if st.button("Synthese abbrechen", type="secondary"):
         try:
             os.kill(int(raw_pid), signal.SIGTERM)
             st.success("Abbruchsignal gesendet. Der Lauf schreibt danach die Fehleranalyse.")
         except ProcessLookupError:
-            st.info("Der XTTS-Prozess laeuft nicht mehr.")
+            st.info("Der Synthese-Prozess laeuft nicht mehr.")
         finally:
             pid_file.unlink(missing_ok=True)
 
@@ -1348,6 +1364,7 @@ def _backend(
     pid_file: Path | None = None,
     xtts_license_confirmed: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ):
     if name == "mock":
         return MockBackend()
@@ -1363,6 +1380,7 @@ def _backend(
             timeout_sec=timeout_sec,
             pid_file=pid_file,
             progress_callback=progress_callback,
+            log_callback=log_callback,
         )
     raise ValueError(f"Unsupported backend: {name}")
 
