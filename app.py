@@ -528,19 +528,25 @@ with left:
                 if use_local_diarize:
                     reporter.overall(0.9, "Lokale Sprechererkennung laeuft ohne Token.")
                     st.write("Lokale Sprechererkennung ohne Token wird ausgefuehrt.")
-                    speaker_segments = run_local_diarize(
-                        audio_path=audio_path,
-                        min_speakers=min_speakers or None,
-                        max_speakers=max_speakers or None,
-                    )
-                    st.session_state.speaker_segments = speaker_segments
-                    speaker_segments_count = len(speaker_segments)
-                    reporter.overall(0.97, "Sprecher werden dem Transkript zugeordnet.")
-                    st.session_state.segments = assign_speakers_by_overlap(
-                        st.session_state.segments,
-                        speaker_segments,
-                    )
-                    st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
+                    try:
+                        speaker_segments = run_local_diarize(
+                            audio_path=audio_path,
+                            min_speakers=min_speakers or None,
+                            max_speakers=max_speakers or None,
+                        )
+                    except RuntimeError as exc:
+                        st.warning(str(exc))
+                        st.info("Das Transkript bleibt ohne Sprecherzuordnung erhalten und kann exportiert werden.")
+                        st.session_state.speaker_segments = []
+                    else:
+                        st.session_state.speaker_segments = speaker_segments
+                        speaker_segments_count = len(speaker_segments)
+                        reporter.overall(0.97, "Sprecher werden dem Transkript zugeordnet.")
+                        st.session_state.segments = assign_speakers_by_overlap(
+                            st.session_state.segments,
+                            speaker_segments,
+                        )
+                        st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
                 reporter.overall(1.0, "Fertig.")
                 processing_seconds = (pd.Timestamp.now() - run_started_at).total_seconds()
                 resource_rows = list(resource_history)

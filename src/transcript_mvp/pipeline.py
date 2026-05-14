@@ -205,6 +205,23 @@ def parse_whisperx_progress(line: str) -> float | None:
 
 
 def format_whisperx_error(details: str) -> str:
+    if is_torchvision_compatibility_error(details):
+        return (
+            "WhisperX konnte nicht starten, weil die installierten PyTorch-Pakete nicht zusammenpassen.\n\n"
+            "Bitte `torch`, `torchaudio` und `torchvision` in kompatiblen Versionen neu installieren. "
+            "Fuer diese Umgebung wurde `torch==2.8.0`, `torchaudio==2.8.0` und `torchvision==0.23.0` getestet.\n\n"
+            f"{details}"
+        )
+    if is_corrupt_alignment_cache_error(details):
+        return (
+            "WhisperX konnte die Datei transkribieren, ist aber bei der wortgenauen Ausrichtung gescheitert.\n\n"
+            "Das englische Alignment-Modell wurde offenbar nur unvollstaendig in den Torch-Cache geladen. "
+            "Bitte die defekte Cache-Datei loeschen und den Lauf erneut starten, oder in der App "
+            "`Wortgenaue Ausrichtung sparen` aktivieren.\n\n"
+            "Cache-Datei:\n"
+            "`~/.cache/torch/hub/checkpoints/wav2vec2_fairseq_base_ls960_asr_ls960.pth`\n\n"
+            f"{details}"
+        )
     if is_silero_download_error(details):
         return (
             "WhisperX konnte die Datei nicht verarbeiten.\n\n"
@@ -222,6 +239,28 @@ def format_whisperx_error(details: str) -> str:
             f"{details}"
         )
     return f"WhisperX konnte die Datei nicht verarbeiten.\n\n{details}"
+
+
+def is_torchvision_compatibility_error(details: str) -> bool:
+    markers = [
+        "operator torchvision::nms does not exist",
+        "Could not import module 'Wav2Vec2ForCTC'",
+    ]
+    return all(marker in details for marker in markers)
+
+
+def is_corrupt_alignment_cache_error(details: str) -> bool:
+    if "PytorchStreamReader failed reading zip archive" not in details:
+        return False
+    if "failed finding central directory" not in details:
+        return False
+    alignment_markers = [
+        "wav2vec2_fairseq_base_ls960_asr_ls960.pth",
+        "load_align_model",
+        "torchaudio/pipelines/_wav2vec2",
+        "load_state_dict_from_url",
+    ]
+    return any(marker in details for marker in alignment_markers)
 
 
 def is_missing_model_cache_error(details: str) -> bool:

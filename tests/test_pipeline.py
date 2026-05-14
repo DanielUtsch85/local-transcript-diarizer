@@ -6,14 +6,18 @@ import unittest
 
 from transcript_mvp.estimates import estimate_processing_seconds
 from transcript_mvp.feedback import build_feedback_csv
+from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error
 from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment, format_timestamp
 from transcript_mvp.pipeline import (
     assign_speakers_by_overlap,
     best_speaker_for_segment,
     build_whisperx_command,
     extract_speakers,
+    format_whisperx_error,
+    is_corrupt_alignment_cache_error,
     is_missing_model_cache_error,
     is_silero_download_error,
+    is_torchvision_compatibility_error,
     parse_whisperx_progress,
     render_segments,
     transcript_from_stdout,
@@ -111,6 +115,39 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(is_missing_model_cache_error("LocalEntryNotFoundError"))
         self.assertTrue(is_missing_model_cache_error("Failed to resolve 'huggingface.co'"))
         self.assertFalse(is_missing_model_cache_error("unrelated"))
+
+    def test_detects_torchvision_compatibility_error(self):
+        details = (
+            "RuntimeError: operator torchvision::nms does not exist "
+            "ModuleNotFoundError: Could not import module 'Wav2Vec2ForCTC'."
+        )
+
+        self.assertTrue(is_torchvision_compatibility_error(details))
+        self.assertIn("PyTorch-Pakete", format_whisperx_error(details))
+
+    def test_detects_corrupt_alignment_cache_error(self):
+        details = (
+            "Downloading wav2vec2_fairseq_base_ls960_asr_ls960.pth "
+            "RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory"
+        )
+
+        self.assertTrue(is_corrupt_alignment_cache_error(details))
+        self.assertIn("wortgenauen Ausrichtung", format_whisperx_error(details))
+
+    def test_detects_corrupt_alignment_cache_error_without_filename(self):
+        details = (
+            "File whisperx/alignment.py load_align_model "
+            "File torchaudio/pipelines/_wav2vec2/impl.py "
+            "RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory"
+        )
+
+        self.assertTrue(is_corrupt_alignment_cache_error(details))
+
+    def test_detects_corrupt_silero_vad_error(self):
+        details = "PytorchStreamReader failed reading zip archive: failed finding central directory"
+
+        self.assertTrue(is_corrupt_silero_vad_error(details))
+        self.assertIn("Silero-Modelldatei", format_local_diarize_error(details))
 
     def test_detects_silero_download_error(self):
         self.assertTrue(is_silero_download_error("torch.hub.load repo_or_dir='snakers4/silero-vad'"))
