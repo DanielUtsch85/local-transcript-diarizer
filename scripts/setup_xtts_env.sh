@@ -7,6 +7,8 @@ python3.11 -m venv .venv-xtts
 source .venv-xtts/bin/activate
 python -m pip install --upgrade pip
 python -m pip install "TTS==0.22.0"
+python -m pip install "matplotlib<3.9"
+python -m pip install "typeguard<3"
 python -m pip install "transformers==4.40.2"
 python -m pip install "torch==2.2.2" "torchaudio==2.2.2"
 

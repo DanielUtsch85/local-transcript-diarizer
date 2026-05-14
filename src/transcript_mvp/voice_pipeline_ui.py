@@ -76,7 +76,18 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
 
     with st.form("voice-pipeline-settings"):
         speaker = st.selectbox("Zielsprecher", speakers)
-        language = st.selectbox("Sprache", ["de", "en"], index=0)
+        language_options = ["en", "es", "fr", "zh", "jp", "kr"] if backend == "openvoice" else ["de", "en"]
+        language = st.selectbox(
+            "Sprache",
+            language_options,
+            index=0,
+            help=(
+                "OpenVoice V2 nutzt MeloTTS als Basisstimme und unterstuetzt hier EN/ES/FR/ZH/JP/KR. "
+                "Deutsch ist fuer OpenVoice erst mit externer Basis-TTS-Verdrahtung sinnvoll."
+                if backend == "openvoice"
+                else "Sprache fuer das Synthese-Backend."
+            ),
+        )
         text = st.text_area(
             "Synthese-Text",
             value=(
@@ -227,7 +238,7 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
                 "Synthese automatisch abbrechen nach Minuten",
                 min_value=1,
                 max_value=180,
-                value=30,
+                value=45 if backend == "openvoice" else 30,
                 help=(
                     "Hat keinen Klangvorteil, schuetzt aber vor haengenden Modellprozessen. Wenn der Abbruch greift, "
                     "bleiben Referenzdaten und Fehleranalyse erhalten, aber es entsteht kein vollstaendiges Sample."
@@ -314,6 +325,15 @@ def _resolve_source_audio(data_dir: Path) -> Path | None:
         st.success(f"Aktuelle Audio-Datei aus der Transkription: `{current}`")
         return Path(current)
 
+    existing_audio = _recent_files(data_dir / "uploads", {".mp3", ".wav", ".m4a", ".mp4", ".flac"})
+    if existing_audio:
+        options = ["Neue Audio-Datei hochladen"] + [str(path) for path in existing_audio]
+        selected = st.selectbox("Vorhandene Audio-Datei verwenden", options, index=1)
+        if selected != options[0]:
+            st.session_state.last_audio_path = selected
+            st.success(f"Audio-Datei geladen: `{selected}`")
+            return Path(selected)
+
     uploaded = st.file_uploader(
         "Audio-Datei fuer Voice-Pipeline laden",
         type=["mp3", "wav", "m4a", "mp4", "flac"],
@@ -321,9 +341,7 @@ def _resolve_source_audio(data_dir: Path) -> Path | None:
     )
     if uploaded is None:
         return None
-    target = data_dir / "uploads" / _safe_filename(uploaded.name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(uploaded.getvalue())
+    target = _save_uploaded_once(uploaded, data_dir / "uploads", "voice_audio")
     st.session_state.last_audio_path = str(target)
     return target
 
@@ -354,6 +372,13 @@ def _resolve_diarization_source(data_dir: Path, source_audio: Path | None) -> Pa
             path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
             return path
 
+    existing_diarization = _recent_files(data_dir / "work", {".json", ".jsonl"}, name_contains="diarization")
+    if existing_diarization:
+        options = ["Neue Diarization-Datei hochladen"] + [str(path) for path in existing_diarization]
+        selected = st.selectbox("Vorhandene Diarization verwenden", options, index=1)
+        if selected != options[0]:
+            return Path(selected)
+
     uploaded = st.file_uploader(
         "Oder Diarization JSON/JSONL laden",
         type=["json", "jsonl"],
@@ -361,10 +386,7 @@ def _resolve_diarization_source(data_dir: Path, source_audio: Path | None) -> Pa
     )
     if uploaded is None:
         return None
-    target = data_dir / "work" / _safe_filename(uploaded.name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(uploaded.getvalue())
-    return target
+    return _save_uploaded_once(uploaded, data_dir / "work", "voice_diarization")
 
 
 def _run_pipeline_from_ui(
@@ -1337,7 +1359,11 @@ def _backend(
             progress_callback=progress_callback,
         )
     if name == "openvoice":
-        return OpenVoiceBackend()
+        return OpenVoiceBackend(
+            timeout_sec=timeout_sec,
+            pid_file=pid_file,
+            progress_callback=progress_callback,
+        )
     raise ValueError(f"Unsupported backend: {name}")
 
 
@@ -1348,8 +1374,42 @@ def _backend_hint(name: str) -> str:
             "fuer deinen Einsatzzweck geprueft und bestaetigt werden."
         )
     if name == "openvoice":
-        return "OpenVoice benoetigt eine separate OpenVoice-V2 Installation plus konfigurierte Checkpoints."
+        return (
+            "OpenVoice benoetigt eine separate OpenVoice-V2 Umgebung plus checkpoints_v2. "
+            "Richte sie mit bash scripts/setup_openvoice_env.sh ein und setze bei Bedarf OPENVOICE_CHECKPOINT_DIR."
+        )
     return "Mock erzeugt nur ein Test-WAV und benoetigt keine Modellinstallation."
+
+
+def _recent_files(directory: Path, suffixes: set[str], name_contains: str | None = None, limit: int = 8) -> list[Path]:
+    if not directory.exists():
+        return []
+    files: list[Path] = []
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in suffixes:
+            continue
+        if name_contains and name_contains.lower() not in path.name.lower():
+            continue
+        files.append(path)
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+
+
+def _save_uploaded_once(uploaded: Any, directory: Path, state_prefix: str) -> Path:
+    signature = f"{uploaded.name}:{getattr(uploaded, 'size', 'unknown')}"
+    signature_key = f"{state_prefix}_upload_signature"
+    path_key = f"{state_prefix}_upload_path"
+    previous_path = st.session_state.get(path_key)
+    if st.session_state.get(signature_key) == signature and previous_path and Path(previous_path).exists():
+        return Path(previous_path)
+
+    target = directory / _safe_filename(uploaded.name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(uploaded.getbuffer())
+    st.session_state[signature_key] = signature
+    st.session_state[path_key] = str(target)
+    return target
 
 
 def _safe_filename(name: str) -> str:

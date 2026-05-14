@@ -1,6 +1,6 @@
 # Local Transcript Diarizer
 
-A local macOS-first app for transcribing audio files, detecting speakers locally, exporting clean conversation transcripts, and building target-speaker voice-reference packs for consent-based synthetic audio experiments.
+A local macOS-first Streamlit app for transcribing audio files, detecting speakers locally, exporting clean conversation transcripts, and building consent-based target-speaker voice-reference packs with optional synthetic audio backends.
 
 ## What Runs Locally
 
@@ -9,6 +9,7 @@ A local macOS-first app for transcribing audio files, detecting speakers locally
 - Voice activity detection: pyannote VAD for transcription; Silero VAD for voice-segment scoring when available
 - Export: DOCX, HTML, feedback CSV, diarization JSON, and diarization JSONL
 - Voice pipeline: target-speaker curation, manual reference-pack review, optional reference denoise, mock/XTTS synthesis, metadata logging
+- Run monitoring: bounded CPU/RAM history, live progress reporting, and partial-result recovery hints when WhisperX fails after writing JSON
 - No OpenAI API, no cloud transcription API
 
 Speaker detection runs locally with `diarize`. No token, paid service, or cloud account is required.
@@ -118,6 +119,8 @@ Each completed run creates a feedback CSV with:
 
 This helps evaluate whether a run looks technically and structurally plausible without manually inspecting the full transcript.
 
+Longer local runs keep resource monitoring bounded to the most recent hour of one-second samples. If WhisperX fails after writing a partial JSON result, the app surfaces that file name so the existing JSON loader can be used for recovery instead of losing the whole run context.
+
 ## Voice-Pipeline Page
 
 The sidebar has two app areas:
@@ -207,7 +210,29 @@ XTTS may download model weights on first use. Review the XTTS-v2 model license a
 
 The OpenVoice backend is currently a guarded adapter, not a complete local OpenVoice setup. If selected without a separate OpenVoice V2 installation and configured checkpoints, the app fails fast with a clear error instead of silently producing invalid output.
 
-Use XTTS or the mock backend for current end-to-end tests. OpenVoice can be wired later once the exact repository, checkpoint layout, and conversion flow are selected.
+Use XTTS or the mock backend for German end-to-end tests. OpenVoice V2 is wired through an isolated runner for the MeloTTS-supported synthesis languages `en`, `es`, `fr`, `zh`, `jp`, and `kr`. German OpenVoice output requires an external German base TTS path and is intentionally rejected by the current adapter.
+
+Set up the isolated OpenVoice environment with:
+
+```bash
+bash scripts/setup_openvoice_env.sh
+```
+
+Then place OpenVoice V2 checkpoints under:
+
+```text
+data/models/openvoice/checkpoints_v2/
+  converter/config.json
+  converter/checkpoint.pth
+  base_speakers/ses/*.pth
+```
+
+If your checkpoints live elsewhere, set:
+
+```bash
+export OPENVOICE_PYTHON=/absolute/path/to/openvoice/python
+export OPENVOICE_CHECKPOINT_DIR=/absolute/path/to/checkpoints_v2
+```
 
 ## Input Format
 
@@ -305,7 +330,7 @@ voice-pipeline synthesize \
   --consent-confirmed
 ```
 
-The OpenVoice command currently requires a separate OpenVoice V2 installation and checkpoint-specific wiring. Without that setup it exits with an explanatory error.
+The OpenVoice command currently requires a separate OpenVoice V2 installation and `checkpoints_v2`. Without that setup it exits with an explanatory error. In this app, OpenVoice language choices are limited to the MeloTTS-supported languages.
 
 End-to-end with the lightweight mock backend:
 
@@ -404,7 +429,9 @@ Generated samples can also be reviewed from the UI. The review export combines t
 - `ffmpeg is required`: install `ffmpeg` and make sure it is on `PATH`.
 - `Install faster-whisper`: transcription is optional; run scoring without `--transcribe` or install the package.
 - `XTTS requires a separate Python environment`: run `bash scripts/setup_xtts_env.sh` or set `XTTS_PYTHON`.
-- `OpenVoice V2 is not installed`: OpenVoice requires a separate repository/checkpoint setup; the adapter boundary is present but checkpoint-specific wiring must still be configured.
+- `OpenVoice requires a separate Python environment`: run `bash scripts/setup_openvoice_env.sh` or set `OPENVOICE_PYTHON`.
+- `OpenVoice V2 checkpoints are not configured`: set `OPENVOICE_CHECKPOINT_DIR` to a `checkpoints_v2` folder with converter and base-speaker embeddings.
+- `OpenVoice V2 with MeloTTS does not natively support this synthesis language`: use `en`, `es`, `fr`, `zh`, `jp`, or `kr`, or use XTTS for German.
 - `synthesis requires --consent-confirmed`: confirm explicit target-speaker consent and rerun with the required flag.
 - `accepted_count` is unexpectedly `0`: check `voice_feedback.csv` reject reasons. If `low_speech_ratio` dominates, confirm Silero VAD is installed and that the clips are readable WAV files. If `overlaps_other_speaker` dominates, try disabling overlap rejection for diagnosis, but keep it enabled for high-quality reference packs.
 - Synthetic voice is understandable but not similar enough: try a smaller manually curated reference pack, then A/B test with reference denoise. If similarity remains weak, test another backend instead of only increasing reference duration.

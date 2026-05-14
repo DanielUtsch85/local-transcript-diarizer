@@ -1,7 +1,7 @@
 [project]
 name = "local-transcript-diarizer"
 version = "0.1.0"
-description = "Local MP3 transcription with speaker labels and DOCX export."
+description = "Local Streamlit transcription, speaker diarization, transcript export, and consent-based voice reference tooling."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [

@@ -18,6 +18,7 @@ from transcript_mvp.pipeline import (
     render_segments,
     transcript_from_stdout,
 )
+from transcript_mvp.progress import ProgressReporter
 from transcript_mvp.resources import _pressure_label
 
 
@@ -131,6 +132,59 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(assigned[0].speaker, "SPEAKER_00")
         self.assertEqual(assigned[1].speaker, "SPEAKER_01")
 
+    def test_assign_speakers_single_speaker_perfect_overlap(self):
+        assigned = assign_speakers_by_overlap(
+            [TranscriptSegment(start=0, end=5, speaker="SPEAKER_UNKNOWN", text="Hallo")],
+            [SpeakerSegment(start=0, end=5, speaker="SPEAKER_00")],
+        )
+
+        self.assertEqual([segment.speaker for segment in assigned], ["SPEAKER_00"])
+
+    def test_assign_speakers_two_speakers_non_overlapping(self):
+        assigned = assign_speakers_by_overlap(
+            [
+                TranscriptSegment(start=0, end=4, speaker="SPEAKER_UNKNOWN", text="Hallo"),
+                TranscriptSegment(start=4, end=8, speaker="SPEAKER_UNKNOWN", text="Guten Tag"),
+            ],
+            [
+                SpeakerSegment(start=0, end=4, speaker="SPEAKER_00"),
+                SpeakerSegment(start=4, end=8, speaker="SPEAKER_01"),
+            ],
+        )
+
+        self.assertEqual([segment.speaker for segment in assigned], ["SPEAKER_00", "SPEAKER_01"])
+
+    def test_assign_speakers_uses_greatest_overlap(self):
+        assigned = assign_speakers_by_overlap(
+            [TranscriptSegment(start=0, end=10, speaker="SPEAKER_UNKNOWN", text="Hallo")],
+            [
+                SpeakerSegment(start=0, end=3, speaker="SPEAKER_00"),
+                SpeakerSegment(start=3, end=10, speaker="SPEAKER_01"),
+            ],
+        )
+
+        self.assertEqual(assigned[0].speaker, "SPEAKER_01")
+
+    def test_assign_speakers_keeps_original_labels_without_diarization(self):
+        assigned = assign_speakers_by_overlap(
+            [
+                TranscriptSegment(start=0, end=4, speaker="ORIGINAL_00", text="Hallo"),
+                TranscriptSegment(start=4, end=8, speaker="ORIGINAL_01", text="Guten Tag"),
+            ],
+            [],
+            max_merged_duration=0,
+        )
+
+        self.assertEqual([segment.speaker for segment in assigned], ["ORIGINAL_00", "ORIGINAL_01"])
+
+    def test_assign_speakers_handles_diarization_past_audio_end(self):
+        assigned = assign_speakers_by_overlap(
+            [TranscriptSegment(start=0, end=5, speaker="SPEAKER_UNKNOWN", text="Hallo")],
+            [SpeakerSegment(start=0, end=30, speaker="SPEAKER_00")],
+        )
+
+        self.assertEqual(assigned[0].speaker, "SPEAKER_00")
+
     def test_assign_speakers_does_not_create_huge_merged_segment(self):
         transcript_segments = [
             TranscriptSegment(start=0, end=80, speaker="SPEAKER_UNKNOWN", text="A"),
@@ -149,6 +203,20 @@ class PipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(speaker, "SPEAKER_00")
+
+    def test_progress_reporter_clamps_overall_progress(self):
+        events = []
+        reporter = ProgressReporter(
+            on_overall=lambda value, text: events.append((value, text)),
+            on_transcription=lambda value: None,
+            on_tick=lambda elapsed, pid: None,
+            on_log=lambda line: None,
+        )
+
+        reporter.overall(1.5, "zu viel")
+        reporter.overall(-0.5, "zu wenig")
+
+        self.assertEqual(events, [(1.0, "zu viel"), (0.0, "zu wenig")])
 
     def test_pressure_labels(self):
         self.assertEqual(_pressure_label(50), "niedrig")

@@ -1,5 +1,7 @@
+from collections import deque
 from pathlib import Path
 import sys
+from typing import Any
 
 import altair as alt
 import pandas as pd
@@ -26,10 +28,61 @@ from transcript_mvp.pipeline import (
     save_upload,
     run_whisperx,
 )
-from transcript_mvp.resources import collect_resource_snapshot
-from transcript_mvp.voice_pipeline_ui import render_voice_pipeline_page
+from transcript_mvp.progress import ProgressReporter
+from transcript_mvp.resources import ResourceSnapshot, collect_resource_snapshot
 
 DATA_DIR = APP_ROOT / "data"
+ResourceHistory = deque[dict[str, float | int]]
+
+_PERF_DEFAULTS: dict[bool, dict[str, int | str]] = {
+    True: {
+        "batch_size": 1,
+        "chunk_size": 20,
+        "threads": 4,
+        "batch_help": (
+            "Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. "
+            "Kleinere Werte brauchen weniger RAM, sind aber langsamer."
+        ),
+        "chunk_help": (
+            "Laenge der Audio-Bloecke fuer die Transkription. Kleinere Chunks senken Speicherverbrauch, "
+            "koennen aber etwas langsamer und weniger stabil im Kontext sein."
+        ),
+        "threads_help": (
+            "Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; mehr Threads koennen "
+            "schneller sein, belasten aber den Rechner staerker."
+        ),
+    },
+    False: {
+        "batch_size": 4,
+        "chunk_size": 30,
+        "threads": 0,
+        "batch_help": (
+            "Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. "
+            "Groessere Werte koennen schneller sein, brauchen aber deutlich mehr RAM."
+        ),
+        "chunk_help": (
+            "Laenge der Audio-Bloecke fuer die Transkription. Groessere Chunks geben dem Modell mehr Kontext, "
+            "brauchen aber mehr Speicher."
+        ),
+        "threads_help": (
+            "Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; feste Werte koennen "
+            "Last und Laufzeit planbarer machen."
+        ),
+    },
+}
+
+
+def _init_session_state() -> None:
+    defaults = {
+        "segments": [],
+        "source_name": "transkript",
+        "feedback_csv": None,
+        "feedback_filename": "feedback.csv",
+        "speaker_segments": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def format_duration(seconds: float | None) -> str:
@@ -69,8 +122,13 @@ def memory_pressure_help(label: str) -> str:
     return "Nicht verfuegbar."
 
 
-def append_resource_history(history: list[dict], elapsed: float, process_pid: int) -> None:
-    snapshot = collect_resource_snapshot(process_pid)
+def append_resource_history(
+    history: ResourceHistory,
+    elapsed: float,
+    process_pid: int,
+    snapshot: ResourceSnapshot | None = None,
+) -> None:
+    snapshot = snapshot or collect_resource_snapshot(process_pid)
     if not snapshot.available:
         return
     process_cpu_percent = snapshot.process_cpu_percent or 0.0
@@ -94,10 +152,10 @@ def append_resource_history(history: list[dict], elapsed: float, process_pid: in
     )
 
 
-def render_resource_history(history: list[dict]) -> None:
+def render_resource_history(history: ResourceHistory | list[dict[str, float | int]]) -> None:
     if len(history) < 2:
         return
-    frame = pd.DataFrame(history).drop_duplicates(subset=["Zeit"], keep="last")
+    frame = pd.DataFrame(list(history)).drop_duplicates(subset=["Zeit"], keep="last")
     st.markdown("**Verlauf**")
     system_frame = frame[["Zeit", "CPU gesamt %", "RAM gesamt %", "Speicherdruck %"]].melt(
         "Zeit",
@@ -146,6 +204,104 @@ def render_resource_history(history: list[dict]) -> None:
     )
 
 
+def build_streamlit_progress_reporter(
+    *,
+    overall_progress: Any,
+    transcription_progress: Any,
+    elapsed_box: Any,
+    resource_box: Any,
+    log_box: Any,
+    resource_history: ResourceHistory,
+    estimated_seconds: float | None,
+    use_local_diarize: bool,
+) -> ProgressReporter:
+    log_lines: list[str] = []
+    progress_state = {"transcription": 0.0}
+
+    def update_overall_progress(value: float, text: str) -> None:
+        overall_progress.progress(min(1.0, max(0.0, value)), text=text)
+
+    def update_transcription_progress(value: float) -> None:
+        progress_state["transcription"] = value
+        transcription_progress.progress(
+            value,
+            text=f"Transkription: {value * 100:.1f}%",
+        )
+        update_overall_progress(
+            value * (0.85 if use_local_diarize else 0.95),
+            f"Gesamtfortschritt: Transkription {value * 100:.1f}%",
+        )
+
+    def update_elapsed(elapsed: float, process_pid: int) -> None:
+        if estimated_seconds:
+            remaining = max(0.0, estimated_seconds - elapsed)
+            if progress_state["transcription"] == 0:
+                update_overall_progress(
+                    min(0.2, elapsed / estimated_seconds),
+                    "Gesamtfortschritt: startet...",
+                )
+            transcription_progress.progress(
+                progress_state["transcription"],
+                text=(
+                    f"Transkription: {progress_state['transcription'] * 100:.1f}% "
+                    f"- laeuft seit {format_duration(elapsed)}, "
+                    f"grobe Restzeit {format_duration(remaining)}"
+                ),
+            )
+        else:
+            transcription_progress.progress(
+                progress_state["transcription"],
+                text=(
+                    f"Transkription: {progress_state['transcription'] * 100:.1f}% "
+                    f"- laeuft seit {format_duration(elapsed)}"
+                ),
+            )
+        elapsed_box.caption(
+            "Die Anzeige ist eine Schaetzung, weil WhisperX keinen exakten Gesamtfortschritt liefert."
+        )
+        snapshot = collect_resource_snapshot(process_pid)
+        append_resource_history(resource_history, elapsed, process_pid, snapshot)
+        with resource_box.container():
+            st.markdown("**System & Speicher**")
+            if not snapshot.available:
+                st.warning(snapshot.message)
+            else:
+                metric_columns = st.columns(4)
+                metric_columns[0].metric("CPU gesamt", format_percent(snapshot.system_cpu_percent))
+                metric_columns[1].metric("WhisperX CPU", format_percent(snapshot.process_cpu_percent))
+                metric_columns[2].metric(
+                    "RAM gesamt",
+                    f"{format_percent(snapshot.system_memory_percent)}",
+                    help=(
+                        f"{format_gb(snapshot.system_memory_used_gb)} von "
+                        f"{format_gb(snapshot.system_memory_total_gb)}"
+                    ),
+                )
+                metric_columns[3].metric("WhisperX RAM", format_gb(snapshot.process_memory_gb))
+                pressure = snapshot.memory_pressure_percent or 0.0
+                st.progress(
+                    min(1.0, pressure / 100.0),
+                    text=(
+                        f"Speicherdruck: {snapshot.memory_pressure_label} "
+                        f"({format_percent(snapshot.memory_pressure_percent)})"
+                    ),
+                )
+                st.caption(memory_pressure_help(snapshot.memory_pressure_label))
+                render_resource_history(resource_history)
+
+    def append_log(line: str) -> None:
+        log_lines.append(line)
+        visible_lines = log_lines[-30:]
+        log_box.code("\n".join(visible_lines), language="text")
+
+    return ProgressReporter(
+        on_overall=update_overall_progress,
+        on_transcription=update_transcription_progress,
+        on_tick=update_elapsed,
+        on_log=append_log,
+    )
+
+
 def render_finished_kpis(audio_duration: float | None, processing_seconds: float, resource_history: list[dict]) -> None:
     transcript_stats = transcript_kpis(st.session_state.segments, audio_duration)
     resource_stats = resource_kpis(resource_history)
@@ -179,6 +335,7 @@ def render_finished_kpis(audio_duration: float | None, processing_seconds: float
 
 
 st.set_page_config(page_title="Lokale Transkription", layout="wide")
+_init_session_state()
 
 st.title("Lokale Transkription")
 st.caption("MP3 rein, Sprecherlabels pruefen, Word-Datei raus.")
@@ -193,6 +350,8 @@ page = st.sidebar.radio(
 )
 
 if page == "Voice-Pipeline":
+    from transcript_mvp.voice_pipeline_ui import render_voice_pipeline_page
+
     render_voice_pipeline_page(DATA_DIR)
     st.stop()
 
@@ -228,60 +387,33 @@ with st.sidebar:
         help="Obere Grenze fuer die Sprechererkennung. 2 passt gut fuer Interviews; hoeher setzen, wenn mehr Personen sprechen.",
     )
     with st.expander("Leistung & Speicher"):
-        if memory_mode:
-            batch_size = st.number_input(
-                "Batch-Groesse",
-                min_value=1,
-                max_value=16,
-                value=1,
-                help="Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. Kleinere Werte brauchen weniger RAM, sind aber langsamer.",
-            )
-            chunk_size = st.number_input(
-                "Chunk-Groesse Sekunden",
-                min_value=5,
-                max_value=60,
-                value=20,
-                help="Laenge der Audio-Bloecke fuer die Transkription. Kleinere Chunks senken Speicherverbrauch, koennen aber etwas langsamer und weniger stabil im Kontext sein.",
-            )
-            no_align = st.toggle(
-                "Wortgenaue Ausrichtung sparen",
-                value=False,
-                help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
-            )
-            threads = st.number_input(
-                "CPU-Threads",
-                min_value=0,
-                max_value=16,
-                value=4,
-                help="Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; mehr Threads koennen schneller sein, belasten aber den Rechner staerker.",
-            )
-        else:
-            batch_size = st.number_input(
-                "Batch-Groesse",
-                min_value=1,
-                max_value=16,
-                value=4,
-                help="Anzahl der Audio-Stuecke, die WhisperX gleichzeitig verarbeitet. Groessere Werte koennen schneller sein, brauchen aber deutlich mehr RAM.",
-            )
-            chunk_size = st.number_input(
-                "Chunk-Groesse Sekunden",
-                min_value=5,
-                max_value=60,
-                value=30,
-                help="Laenge der Audio-Bloecke fuer die Transkription. Groessere Chunks geben dem Modell mehr Kontext, brauchen aber mehr Speicher.",
-            )
-            no_align = st.toggle(
-                "Wortgenaue Ausrichtung sparen",
-                value=False,
-                help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
-            )
-            threads = st.number_input(
-                "CPU-Threads",
-                min_value=0,
-                max_value=16,
-                value=0,
-                help="Anzahl CPU-Threads fuer WhisperX. 0 ueberlaesst die Wahl dem System; feste Werte koennen Last und Laufzeit planbarer machen.",
-            )
+        perf_defaults = _PERF_DEFAULTS[memory_mode]
+        batch_size = st.number_input(
+            "Batch-Groesse",
+            min_value=1,
+            max_value=16,
+            value=int(perf_defaults["batch_size"]),
+            help=str(perf_defaults["batch_help"]),
+        )
+        chunk_size = st.number_input(
+            "Chunk-Groesse Sekunden",
+            min_value=5,
+            max_value=60,
+            value=int(perf_defaults["chunk_size"]),
+            help=str(perf_defaults["chunk_help"]),
+        )
+        no_align = st.toggle(
+            "Wortgenaue Ausrichtung sparen",
+            value=False,
+            help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
+        )
+        threads = st.number_input(
+            "CPU-Threads",
+            min_value=0,
+            max_value=16,
+            value=int(perf_defaults["threads"]),
+            help=str(perf_defaults["threads_help"]),
+        )
         vad_method = st.selectbox(
             "Spracherkennung vor Transkription",
             ["pyannote", "silero"],
@@ -297,17 +429,6 @@ with st.sidebar:
     st.caption("Speichermodus nutzt `int8`, kleine Batches und kleinere Audio-Chunks.")
 
 uploaded = st.file_uploader("MP3-Datei auswaehlen", type=["mp3", "wav", "m4a", "mp4"])
-
-if "segments" not in st.session_state:
-    st.session_state.segments = []
-if "source_name" not in st.session_state:
-    st.session_state.source_name = "transkript"
-if "feedback_csv" not in st.session_state:
-    st.session_state.feedback_csv = None
-if "feedback_filename" not in st.session_state:
-    st.session_state.feedback_filename = "feedback.csv"
-if "speaker_segments" not in st.session_state:
-    st.session_state.speaker_segments = []
 
 left, right = st.columns([2, 1])
 
@@ -356,85 +477,17 @@ with left:
                 elapsed_box = st.empty()
                 resource_box = st.empty()
                 log_box = st.empty()
-                log_lines = []
-                resource_history = []
-                progress_state = {"transcription": 0.0}
-
-                def update_overall_progress(value: float, text: str) -> None:
-                    overall_progress.progress(min(1.0, max(0.0, value)), text=text)
-
-                def update_transcription_progress(value: float) -> None:
-                    progress_state["transcription"] = value
-                    transcription_progress.progress(
-                        value,
-                        text=f"Transkription: {value * 100:.1f}%",
-                    )
-                    update_overall_progress(
-                        value * (0.85 if use_local_diarize else 0.95),
-                        f"Gesamtfortschritt: Transkription {value * 100:.1f}%",
-                    )
-
-                def update_elapsed(elapsed: float, process_pid: int) -> None:
-                    if estimated_seconds:
-                        remaining = max(0.0, estimated_seconds - elapsed)
-                        if progress_state["transcription"] == 0:
-                            update_overall_progress(
-                                min(0.2, elapsed / estimated_seconds),
-                                "Gesamtfortschritt: startet...",
-                            )
-                        transcription_progress.progress(
-                            progress_state["transcription"],
-                            text=(
-                                f"Transkription: {progress_state['transcription'] * 100:.1f}% "
-                                f"- laeuft seit {format_duration(elapsed)}, "
-                                f"grobe Restzeit {format_duration(remaining)}"
-                            ),
-                        )
-                    else:
-                        transcription_progress.progress(
-                            progress_state["transcription"],
-                            text=(
-                                f"Transkription: {progress_state['transcription'] * 100:.1f}% "
-                                f"- laeuft seit {format_duration(elapsed)}"
-                            ),
-                        )
-                    elapsed_box.caption(
-                        "Die Anzeige ist eine Schaetzung, weil WhisperX keinen exakten Gesamtfortschritt liefert."
-                    )
-                    snapshot = collect_resource_snapshot(process_pid)
-                    append_resource_history(resource_history, elapsed, process_pid)
-                    with resource_box.container():
-                        st.markdown("**System & Speicher**")
-                        if not snapshot.available:
-                            st.warning(snapshot.message)
-                        else:
-                            metric_columns = st.columns(4)
-                            metric_columns[0].metric("CPU gesamt", format_percent(snapshot.system_cpu_percent))
-                            metric_columns[1].metric("WhisperX CPU", format_percent(snapshot.process_cpu_percent))
-                            metric_columns[2].metric(
-                                "RAM gesamt",
-                                f"{format_percent(snapshot.system_memory_percent)}",
-                                help=(
-                                    f"{format_gb(snapshot.system_memory_used_gb)} von "
-                                    f"{format_gb(snapshot.system_memory_total_gb)}"
-                                ),
-                            )
-                            metric_columns[3].metric("WhisperX RAM", format_gb(snapshot.process_memory_gb))
-                            pressure = snapshot.memory_pressure_percent or 0.0
-                            st.progress(
-                                min(1.0, pressure / 100.0),
-                                text=(
-                                    f"Speicherdruck: {snapshot.memory_pressure_label} "
-                                    f"({format_percent(snapshot.memory_pressure_percent)})"
-                                ),
-                            )
-                            st.caption(memory_pressure_help(snapshot.memory_pressure_label))
-                            render_resource_history(resource_history)
-
-                def append_log(line: str) -> None:
-                    log_lines.append(line)
-                    visible_lines = log_lines[-30:]
-                    log_box.code("\n".join(visible_lines), language="text")
+                resource_history: ResourceHistory = deque(maxlen=3600)
+                reporter = build_streamlit_progress_reporter(
+                    overall_progress=overall_progress,
+                    transcription_progress=transcription_progress,
+                    elapsed_box=elapsed_box,
+                    resource_box=resource_box,
+                    log_box=log_box,
+                    resource_history=resource_history,
+                    estimated_seconds=estimated_seconds,
+                    use_local_diarize=use_local_diarize,
+                )
 
                 try:
                     output_json = run_whisperx(
@@ -449,16 +502,20 @@ with left:
                         threads=threads,
                         no_align=no_align,
                         vad_method=vad_method,
-                        on_output=append_log,
-                        on_tick=update_elapsed,
-                        on_progress=update_transcription_progress,
+                        reporter=reporter,
                     )
                 except RuntimeError as exc:
                     status.update(label="Fehlgeschlagen", state="error")
                     st.error(str(exc))
+                    partial_jsons = sorted(run_dir.glob("*.json"))
+                    if partial_jsons:
+                        st.warning(
+                            f"Partielles Ergebnis gefunden: `{partial_jsons[-1].name}`. "
+                            "Du kannst es unten als JSON laden."
+                        )
                     st.stop()
                 transcription_progress.progress(1.0, text="Transkription: 100.0%")
-                update_overall_progress(
+                reporter.overall(
                     0.9 if use_local_diarize else 0.98,
                     "Transkription abgeschlossen. Ergebnis wird geladen.",
                 )
@@ -469,7 +526,7 @@ with left:
                     merge_adjacent=not use_local_diarize,
                 )
                 if use_local_diarize:
-                    update_overall_progress(0.9, "Lokale Sprechererkennung laeuft ohne Token.")
+                    reporter.overall(0.9, "Lokale Sprechererkennung laeuft ohne Token.")
                     st.write("Lokale Sprechererkennung ohne Token wird ausgefuehrt.")
                     speaker_segments = run_local_diarize(
                         audio_path=audio_path,
@@ -478,14 +535,15 @@ with left:
                     )
                     st.session_state.speaker_segments = speaker_segments
                     speaker_segments_count = len(speaker_segments)
-                    update_overall_progress(0.97, "Sprecher werden dem Transkript zugeordnet.")
+                    reporter.overall(0.97, "Sprecher werden dem Transkript zugeordnet.")
                     st.session_state.segments = assign_speakers_by_overlap(
                         st.session_state.segments,
                         speaker_segments,
                     )
                     st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
-                update_overall_progress(1.0, "Fertig.")
+                reporter.overall(1.0, "Fertig.")
                 processing_seconds = (pd.Timestamp.now() - run_started_at).total_seconds()
+                resource_rows = list(resource_history)
                 feedback_csv = build_feedback_csv(
                     source_name=st.session_state.source_name,
                     settings={
@@ -505,7 +563,7 @@ with left:
                     audio_duration_seconds=audio_duration,
                     processing_seconds=processing_seconds,
                     segments=st.session_state.segments,
-                    resource_history=resource_history,
+                    resource_history=resource_rows,
                     speaker_segments_count=speaker_segments_count,
                     output_json_path=str(output_json),
                     include_text_samples=include_feedback_text_samples,
@@ -515,7 +573,7 @@ with left:
                 st.session_state.feedback_csv = feedback_csv
                 st.session_state.feedback_filename = f"{st.session_state.source_name}-feedback.csv"
                 st.write(f"Feedback-CSV erstellt: `{feedback_path}`")
-                render_finished_kpis(audio_duration, processing_seconds, resource_history)
+                render_finished_kpis(audio_duration, processing_seconds, resource_rows)
                 status.update(label="Fertig", state="complete")
 
     uploaded_json = st.file_uploader(

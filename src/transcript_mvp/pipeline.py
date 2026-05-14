@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 from .models import SpeakerSegment, TranscriptSegment
+from .progress import ProgressReporter
 
 
 def create_run_dir(base_dir: Path, source_name: str) -> Path:
@@ -43,6 +44,7 @@ def run_whisperx(
     on_output: Callable[[str], None] | None = None,
     on_tick: Callable[[float, int], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
+    reporter: ProgressReporter | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     cmd = build_whisperx_command(
@@ -88,17 +90,27 @@ def run_whisperx(
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
 
+    def handle_output_line(line: str) -> None:
+        output_lines.append(line)
+        progress = parse_whisperx_progress(line)
+        if progress is not None:
+            if reporter:
+                reporter.transcription(progress)
+            elif on_progress:
+                on_progress(progress)
+        if reporter:
+            reporter.log(line)
+        elif on_output:
+            on_output(line)
+
     while process.poll() is None or not line_queue.empty():
         while not line_queue.empty():
             line = line_queue.get()
             if line:
-                output_lines.append(line)
-                progress = parse_whisperx_progress(line)
-                if progress is not None and on_progress:
-                    on_progress(progress)
-                if on_output:
-                    on_output(line)
-        if on_tick:
+                handle_output_line(line)
+        if reporter:
+            reporter.tick(time.monotonic() - started_at, process.pid)
+        elif on_tick:
             on_tick(time.monotonic() - started_at, process.pid)
         time.sleep(0.5)
 
@@ -106,12 +118,7 @@ def run_whisperx(
     while not line_queue.empty():
         line = line_queue.get()
         if line:
-            output_lines.append(line)
-            progress = parse_whisperx_progress(line)
-            if progress is not None and on_progress:
-                on_progress(progress)
-            if on_output:
-                on_output(line)
+            handle_output_line(line)
 
     if process.returncode != 0:
         details = "\n".join(output_lines[-80:]).strip()
