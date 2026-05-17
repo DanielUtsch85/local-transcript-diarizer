@@ -10,6 +10,8 @@ from .audio_io import read_wav_mono
 from .segment_loader import DiarizationSegment
 from .vad import speech_ratio
 
+SOFT_SPEECH_REJECT_REASONS = {"low_speech_ratio", "too_silent"}
+
 
 def _db(value: float) -> float:
     if value <= 0:
@@ -91,6 +93,35 @@ def score_segment(
     row["accepted"] = not reasons
     row["reject_reasons"] = sorted(set(reasons))
     return row
+
+
+def relax_speech_ratio_rejections(
+    rows: list[dict[str, Any]],
+    *,
+    fallback_min_speech_ratio: float = 0.45,
+    configured_min_speech_ratio: float | None = None,
+) -> list[dict[str, Any]]:
+    """Avoid an empty reference pack when VAD is stricter than the audio warrants."""
+    if any(row.get("accepted") for row in rows):
+        return list(rows)
+
+    relaxed_rows: list[dict[str, Any]] = []
+    for row in rows:
+        reasons = set(row.get("reject_reasons") or [])
+        speech_ratio_value = float(row.get("speech_ratio") or 0.0)
+        if reasons and reasons.issubset(SOFT_SPEECH_REJECT_REASONS) and speech_ratio_value >= fallback_min_speech_ratio:
+            relaxed = dict(row)
+            relaxed["accepted"] = True
+            relaxed["reject_reasons"] = []
+            relaxed["quality_warnings"] = sorted(set(relaxed.get("quality_warnings") or []) | reasons)
+            relaxed["acceptance_mode"] = "relaxed_speech_ratio"
+            relaxed["fallback_min_speech_ratio"] = fallback_min_speech_ratio
+            if configured_min_speech_ratio is not None:
+                relaxed["configured_min_speech_ratio"] = configured_min_speech_ratio
+            relaxed_rows.append(relaxed)
+        else:
+            relaxed_rows.append(row)
+    return relaxed_rows
 
 
 def segment_overlap(segment: DiarizationSegment, all_segments: list[DiarizationSegment]) -> dict[str, Any]:

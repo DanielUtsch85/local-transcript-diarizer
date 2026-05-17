@@ -171,7 +171,7 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
                 "Min. Sprachanteil",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.75,
+                value=0.55,
                 step=0.01,
                 help=(
                     "Mindestanteil erkannter Sprache im Segment. Hoehere Werte entfernen Pausen und Stille strenger; "
@@ -420,7 +420,7 @@ def _run_pipeline_from_ui(
     from voice_pipeline.feedback import build_voice_feedback_csv
     from voice_pipeline.logging_utils import write_json, write_jsonl
     from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
-    from voice_pipeline.quality import score_segment, segment_overlap
+    from voice_pipeline.quality import relax_speech_ratio_rejections, score_segment, segment_overlap
     from voice_pipeline.reference_pack import build_reference_pack
     from voice_pipeline.segment_loader import filter_segments, load_segments, segment_filename
 
@@ -540,6 +540,11 @@ def _run_pipeline_from_ui(
                     int(index / max(1, len(extracted)) * 100),
                     text=f"Qualitaet bewerten: {index}/{len(extracted)} ({_elapsed(started_at)})",
                 )
+        scored = relax_speech_ratio_rejections(
+            scored,
+            fallback_min_speech_ratio=float(cfg["quality"].get("fallback_min_speech_ratio", 0.45)),
+            configured_min_speech_ratio=float(cfg["quality"].get("min_speech_ratio", min_speech_ratio)),
+        )
         write_jsonl(manifests_dir / "segments.jsonl", scored)
         overall_progress.progress(70, text="Segmente bewertet")
 

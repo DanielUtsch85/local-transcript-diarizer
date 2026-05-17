@@ -13,7 +13,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "quality": {
         "min_duration_sec": 2.0,
         "max_duration_sec": 15.0,
-        "min_speech_ratio": 0.75,
+        "min_speech_ratio": 0.55,
+        "fallback_min_speech_ratio": 0.45,
         "max_clipping_ratio": 0.001,
         "min_rms_db": -35,
         "max_peak_db": -0.5,
