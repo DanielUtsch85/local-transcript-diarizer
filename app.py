@@ -1,10 +1,14 @@
 from collections import deque
+import os
 from pathlib import Path
+import signal
 import sys
+import threading
 import time
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 APP_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = APP_ROOT / "src"
@@ -334,11 +338,51 @@ def render_finished_kpis(audio_duration: float | None, processing_seconds: float
         st.info(note)
 
 
+def request_app_shutdown(delay_seconds: float = 0.8) -> None:
+    def shutdown() -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    timer = threading.Timer(delay_seconds, shutdown)
+    timer.daemon = True
+    timer.start()
+
+
+def render_app_header() -> None:
+    title_col, stop_col = st.columns([0.78, 0.22], vertical_alignment="top")
+    with title_col:
+        st.title("Lokale Transkription")
+        st.caption("MP3 rein, Sprecherlabels pruefen, Word-Datei raus.")
+    with stop_col:
+        st.write("")
+        st.write("")
+        if st.button(
+            "App schließen",
+            type="secondary",
+            width="stretch",
+            help="Stoppt den lokalen Streamlit-Server und versucht danach, dieses Browserfenster zu schließen.",
+        ):
+            st.success("App wird beendet. Falls der Browser das automatische Schließen blockiert, kann dieser Tab jetzt geschlossen werden.")
+            components.html(
+                """
+                <script>
+                  setTimeout(() => {
+                    try { window.open('', '_self'); } catch (error) {}
+                    try { window.parent.close(); } catch (error) {}
+                    try { window.top.close(); } catch (error) {}
+                    try { window.close(); } catch (error) {}
+                  }, 250);
+                </script>
+                """,
+                height=0,
+            )
+            request_app_shutdown(delay_seconds=1.5)
+            st.stop()
+
+
 st.set_page_config(page_title="Lokale Transkription", layout="wide")
 _init_session_state()
 
-st.title("Lokale Transkription")
-st.caption("MP3 rein, Sprecherlabels pruefen, Word-Datei raus.")
+render_app_header()
 
 if st.session_state.pop("open_voice_pipeline", False):
     st.session_state.active_page = "Voice-Pipeline"
