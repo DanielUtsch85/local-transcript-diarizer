@@ -5,14 +5,14 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 
-from docx import Document
-from docx.enum.text import WD_BREAK
-from docx.shared import Pt
-
 from .models import SpeakerMapping, SpeakerSegment, TranscriptSegment
 
 
 def build_docx(segments: list[TranscriptSegment], mapping: SpeakerMapping, title: str) -> bytes:
+    from docx import Document
+    from docx.enum.text import WD_BREAK
+    from docx.shared import Pt
+
     document = Document()
     document.add_heading(title or "Transkript", level=1)
 

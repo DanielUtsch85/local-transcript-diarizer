@@ -10,21 +10,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
-import pandas as pd
 import streamlit as st
 
 from transcript_mvp.models import SpeakerSegment, TranscriptSegment
-from voice_pipeline.audio_io import cut_segment, denoise_wav, prepare_audio
-from voice_pipeline.config import load_config
-from voice_pipeline.feedback import build_synthesis_review_csv, build_voice_feedback_csv
-from voice_pipeline.logging_utils import read_jsonl, write_json, write_jsonl
-from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
-from voice_pipeline.quality import score_segment, segment_overlap
-from voice_pipeline.reference_pack import build_reference_pack, build_reference_pack_from_rows
-from voice_pipeline.segment_loader import filter_segments, load_segments, segment_filename
-from voice_pipeline.synthesis.mock_backend import MockBackend
-from voice_pipeline.synthesis.openvoice_backend import OpenVoiceBackend
-from voice_pipeline.synthesis.xtts_backend import XTTSBackend
 
 
 _PIPELINE_STEPS = [
@@ -35,6 +23,14 @@ _PIPELINE_STEPS = [
     ("Referenzen", "Reference-Pack"),
     ("Synthese", "Sample erzeugen"),
 ]
+
+_dialog = getattr(st, "dialog", getattr(st, "experimental_dialog", None))
+if _dialog is None:
+    def _dialog(_title: str):
+        def decorate(func):
+            return func
+
+        return decorate
 
 
 def render_voice_pipeline_page(data_dir: Path) -> None:
@@ -49,6 +45,8 @@ def render_voice_pipeline_page(data_dir: Path) -> None:
         return
 
     try:
+        from voice_pipeline.segment_loader import load_segments
+
         segments = load_segments(diarization_path)
     except ValueError as exc:
         st.error(f"Diarization konnte nicht geladen werden: {exc}")
@@ -417,6 +415,15 @@ def _run_pipeline_from_ui(
     language: str,
     consent_confirmed: bool,
 ) -> None:
+    from voice_pipeline.audio_io import cut_segment, prepare_audio
+    from voice_pipeline.config import load_config
+    from voice_pipeline.feedback import build_voice_feedback_csv
+    from voice_pipeline.logging_utils import write_json, write_jsonl
+    from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
+    from voice_pipeline.quality import score_segment, segment_overlap
+    from voice_pipeline.reference_pack import build_reference_pack
+    from voice_pipeline.segment_loader import filter_segments, load_segments, segment_filename
+
     cfg = load_config()
     cfg["quality"]["min_duration_sec"] = min_duration_sec
     cfg["quality"]["max_duration_sec"] = max_duration_sec
@@ -831,6 +838,8 @@ def _render_feedback_download(feedback_csv: str, *, file_name: str, label: str) 
 
 
 def _rewrite_diarization_source(input_path: Path, prepared_audio: Path, output_path: Path) -> Path:
+    from voice_pipeline.segment_loader import load_segments
+
     rows = [
         {
             "speaker": segment.speaker,
@@ -895,6 +904,8 @@ def _render_existing_outputs(
     rejected_path = manifests / "rejected.jsonl"
     if not accepted_path.exists() and not rejected_path.exists():
         return
+    from voice_pipeline.logging_utils import read_jsonl
+
     generated = _current_session_generated(output_dir)
     st.divider()
     st.subheader("Aktueller Pipeline-Stand")
@@ -917,6 +928,8 @@ def _render_existing_outputs(
         )
     if accepted:
         with st.expander("Akzeptierte Segmente anzeigen"):
+            import pandas as pd
+
             st.dataframe(pd.DataFrame(accepted), use_container_width=True, height=320)
         _render_manual_reference_builder(
             output_dir,
@@ -1037,6 +1050,9 @@ def _render_manual_reference_builder(
         metric_cols[1].metric("Dauer", f"{selected_total:.1f}s")
         metric_cols[2].metric("Kandidaten", len(candidates))
         if st.button("Auswahl als Reference-Pack verwenden", disabled=not selected_rows, type="secondary"):
+            from voice_pipeline.logging_utils import write_json, write_jsonl
+            from voice_pipeline.reference_pack import build_reference_pack_from_rows
+
             reference_rows = _prepare_reference_rows(
                 selected_rows,
                 output_dir=output_dir,
@@ -1101,6 +1117,8 @@ def _synthesize_reference_pack_from_ui(
     synthesis_timeout_sec: int,
     xtts_license_confirmed: bool,
 ) -> None:
+    from voice_pipeline.metadata import synthesis_metadata, validate_consent, write_synthesis_log
+
     reference_files = sorted((output_dir / "voice_refs").glob("ref_*.wav"))
     if not reference_files:
         st.error("Keine Reference-Clips vorhanden.")
@@ -1180,6 +1198,8 @@ def _prepare_reference_rows(
 ) -> list[dict[str, Any]]:
     if not denoise_references:
         return [dict(row, denoise_enabled=False, denoise_strength_db=0.0) for row in rows]
+    from voice_pipeline.audio_io import denoise_wav
+
     denoised_dir = output_dir / "denoised_segments"
     prepared: list[dict[str, Any]] = []
     for row in rows:
@@ -1198,6 +1218,8 @@ def _prepare_reference_rows(
 
 
 def _write_reference_source_manifest(path: Path, rows: list[dict[str, Any]]) -> Path:
+    from voice_pipeline.logging_utils import write_jsonl
+
     write_jsonl(path, rows)
     return path
 
@@ -1232,8 +1254,10 @@ def _render_synthesis_review(output_dir: Path, wav: Path, technical_feedback_pat
         _render_synthesis_review_dialog(output_dir, wav, technical_feedback_path, dialog_key)
 
 
-@st.dialog("Stimme qualitativ bewerten")
+@_dialog("Stimme qualitativ bewerten")
 def _render_synthesis_review_dialog(output_dir: Path, wav: Path, technical_feedback_path: Path, dialog_key: str) -> None:
+    from voice_pipeline.feedback import build_synthesis_review_csv
+
     st.audio(wav.read_bytes(), format="audio/wav")
     st.markdown(
         "**Bewertungsskala**  \n"
@@ -1367,8 +1391,12 @@ def _backend(
     log_callback: Callable[[str], None] | None = None,
 ):
     if name == "mock":
+        from voice_pipeline.synthesis.mock_backend import MockBackend
+
         return MockBackend()
     if name == "xtts":
+        from voice_pipeline.synthesis.xtts_backend import XTTSBackend
+
         return XTTSBackend(
             timeout_sec=timeout_sec,
             pid_file=pid_file,
@@ -1376,6 +1404,8 @@ def _backend(
             progress_callback=progress_callback,
         )
     if name == "openvoice":
+        from voice_pipeline.synthesis.openvoice_backend import OpenVoiceBackend
+
         return OpenVoiceBackend(
             timeout_sec=timeout_sec,
             pid_file=pid_file,

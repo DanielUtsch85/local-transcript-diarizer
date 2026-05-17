@@ -2,31 +2,45 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+if [[ ! -f .venv/bin/activate ]]; then
+  echo "Virtual environment missing. Create it first with: python -m venv .venv" >&2
+  exit 1
+fi
+
 source .venv/bin/activate
 export PYTHONNOUSERSITE=1
 export STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+export STREAMLIT_SERVER_RUN_ON_SAVE=false
 export STREAMLIT_SERVER_MAX_UPLOAD_SIZE=1000
 export STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+export STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "Starting local transcription app..."
 
 PORT="${STREAMLIT_PORT:-8501}"
-HOST="${STREAMLIT_HOST:-localhost}"
+HOST="${STREAMLIT_HOST:-127.0.0.1}"
 URL="http://${HOST}:${PORT}"
+OPEN_BROWSER="${STREAMLIT_OPEN_BROWSER:-1}"
+LOG_DIR="${STREAMLIT_LOG_DIR:-data/logs}"
+LOG_FILE="${STREAMLIT_LOG_FILE:-${LOG_DIR}/streamlit.log}"
+mkdir -p "${LOG_DIR}"
+
+python -c "from importlib.metadata import version; v=version('streamlit'); parts=tuple(int(p) for p in v.split('.')[:2]); print(f'Streamlit {v} detected.'); print('Warning: project expects streamlit>=1.40,<1.50. Run .venv/bin/python -m pip install -r requirements.txt if startup is slow.' if parts >= (1, 50) else '')"
 
 if command -v curl >/dev/null 2>&1 && curl -fsS "${URL}/_stcore/health" >/dev/null 2>&1; then
   echo "App is already running: ${URL}"
-  if command -v open >/dev/null 2>&1; then
+  if [[ "${OPEN_BROWSER}" != "0" ]] && command -v open >/dev/null 2>&1; then
     open "${URL}?reload=$(date +%s)"
   fi
   exit 0
 fi
 
-streamlit run app.py \
+python -m streamlit run app.py \
   --server.headless true \
+  --server.address "${HOST}" \
   --server.port "${PORT}" \
-  "$@" &
+  "$@" >"${LOG_FILE}" 2>&1 &
 APP_PID=$!
 
 cleanup() {
@@ -37,7 +51,8 @@ trap cleanup INT TERM EXIT
 for _ in {1..60}; do
   if command -v curl >/dev/null 2>&1 && curl -fsS "${URL}/_stcore/health" >/dev/null 2>&1; then
     echo "App is ready: ${URL}"
-    if command -v open >/dev/null 2>&1; then
+    echo "Streamlit log: ${LOG_FILE}"
+    if [[ "${OPEN_BROWSER}" != "0" ]] && command -v open >/dev/null 2>&1; then
       open "${URL}?reload=$(date +%s)"
     fi
     wait "${APP_PID}"
@@ -52,4 +67,6 @@ for _ in {1..60}; do
 done
 
 echo "Streamlit did not become ready at ${URL} within 60 seconds." >&2
+echo "Last Streamlit log lines from ${LOG_FILE}:" >&2
+tail -n 80 "${LOG_FILE}" >&2 || true
 exit 1

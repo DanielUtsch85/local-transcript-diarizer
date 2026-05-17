@@ -1,9 +1,9 @@
 from collections import deque
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -11,9 +11,7 @@ SRC_ROOT = APP_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from transcript_mvp.exports import build_diarization_json, build_diarization_jsonl, build_docx, build_html
 from transcript_mvp.estimates import estimate_processing_seconds
-from transcript_mvp.feedback import build_feedback_csv
 from transcript_mvp.kpis import quality_notes, resource_kpis, transcript_kpis
 from transcript_mvp.local_diarization import run_local_diarize
 from transcript_mvp.models import SpeakerMapping
@@ -155,6 +153,7 @@ def render_resource_history(history: ResourceHistory | list[dict[str, float | in
     if len(history) < 2:
         return
     import altair as alt
+    import pandas as pd
 
     frame = pd.DataFrame(list(history)).drop_duplicates(subset=["Zeit"], keep="last")
     st.markdown("**Verlauf**")
@@ -463,7 +462,7 @@ with left:
                 history_dir=DATA_DIR / "runs",
             )
             estimated_seconds = estimate.seconds
-            run_started_at = pd.Timestamp.now()
+            run_started_at = time.monotonic()
             speaker_segments_count = None
             with st.status("WhisperX verarbeitet die Datei lokal...", expanded=True) as status:
                 st.write(f"Audiodauer: {format_duration(audio_duration)}")
@@ -549,8 +548,10 @@ with left:
                         )
                         st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
                 reporter.overall(1.0, "Fertig.")
-                processing_seconds = (pd.Timestamp.now() - run_started_at).total_seconds()
+                processing_seconds = time.monotonic() - run_started_at
                 resource_rows = list(resource_history)
+                from transcript_mvp.feedback import build_feedback_csv
+
                 feedback_csv = build_feedback_csv(
                     source_name=st.session_state.source_name,
                     settings={
@@ -601,6 +602,8 @@ with right:
     if not st.session_state.segments:
         st.info("Nach der Transkription erscheinen hier die Exporte.")
     else:
+        from transcript_mvp.exports import build_diarization_json, build_diarization_jsonl, build_docx, build_html
+
         speakers = extract_speakers(st.session_state.segments)
         mapping_values = {}
         for speaker in speakers:
