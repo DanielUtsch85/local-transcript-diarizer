@@ -64,6 +64,7 @@ def run_whisperx(
     started_at = time.monotonic()
     output_lines: list[str] = []
     line_queue: queue.Queue[str] = queue.Queue()
+    log_path = output_dir / "whisperx.log"
 
     try:
         env = os.environ.copy()
@@ -122,7 +123,10 @@ def run_whisperx(
 
     if process.returncode != 0:
         details = "\n".join(output_lines[-80:]).strip()
+        log_path.write_text("\n".join(output_lines), encoding="utf-8")
         raise RuntimeError(format_whisperx_error(details))
+
+    log_path.write_text("\n".join(output_lines), encoding="utf-8")
 
     json_files = sorted(output_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not json_files:

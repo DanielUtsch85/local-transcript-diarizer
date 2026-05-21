@@ -448,7 +448,7 @@ with st.sidebar:
         )
         no_align = st.toggle(
             "Wortgenaue Ausrichtung sparen",
-            value=False,
+            value=True,
             help="Ueberspringt die genaue Wort-Zeit-Ausrichtung. Das spart Zeit und Speicher, kann aber weniger genaue Zeitmarken liefern.",
         )
         threads = st.number_input(
@@ -508,6 +508,7 @@ with left:
             estimated_seconds = estimate.seconds
             run_started_at = time.monotonic()
             speaker_segments_count = None
+            local_diarization_error = None
             with st.status("WhisperX verarbeitet die Datei lokal...", expanded=True) as status:
                 st.write(f"Audiodauer: {format_duration(audio_duration)}")
                 st.write(f"Grobe Schaetzung: {format_duration(estimated_seconds)}")
@@ -579,6 +580,7 @@ with left:
                             max_speakers=max_speakers or None,
                         )
                     except RuntimeError as exc:
+                        local_diarization_error = str(exc)
                         st.warning(str(exc))
                         st.info("Das Transkript bleibt ohne Sprecherzuordnung erhalten und kann exportiert werden.")
                         st.session_state.speaker_segments = []
@@ -617,6 +619,7 @@ with left:
                     segments=st.session_state.segments,
                     resource_history=resource_rows,
                     speaker_segments_count=speaker_segments_count,
+                    local_diarization_error=local_diarization_error,
                     output_json_path=str(output_json),
                     include_text_samples=include_feedback_text_samples,
                 )

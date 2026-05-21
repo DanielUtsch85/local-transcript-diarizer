@@ -19,6 +19,7 @@ def build_feedback_csv(
     speaker_segments_count: int | None,
     output_json_path: str | None,
     include_text_samples: bool,
+    local_diarization_error: str | None = None,
 ) -> str:
     rows: list[dict[str, str]] = []
 
@@ -66,6 +67,8 @@ def build_feedback_csv(
     add("quality", "very_long_max_segment", bool(segment_durations and max(segment_durations) > 300))
     add("quality", "all_text_one_speaker", len(speakers) == 1 and len(segments) > 1)
     add("diarization", "speaker_time_segments", speaker_segments_count)
+    if local_diarization_error:
+        add("diarization", "error", local_diarization_error)
 
     for speaker, count in Counter(segment.speaker for segment in segments).items():
         add("speaker_segments", speaker, count, "segments")

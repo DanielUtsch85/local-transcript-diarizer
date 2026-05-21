@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import tempfile
 
 from .models import SpeakerSegment
 
@@ -23,12 +25,21 @@ def run_local_diarize(
     exact = minimum if min_speakers and max_speakers and min_speakers == max_speakers else None
 
     try:
-        result = diarize(
-            audio_path,
-            min_speakers=minimum,
-            max_speakers=maximum,
-            num_speakers=exact,
-        )
+        with tempfile.TemporaryDirectory(prefix="local-diarize-") as temp_dir:
+            diarize_audio_path = prepare_audio_for_local_diarize(audio_path, Path(temp_dir))
+            result = diarize(
+                diarize_audio_path,
+                min_speakers=minimum,
+                max_speakers=maximum,
+                num_speakers=exact,
+            )
+    except subprocess.CalledProcessError as exc:
+        details = exc.stderr or exc.stdout or str(exc)
+        raise RuntimeError(format_local_diarize_error(details)) from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            format_local_diarize_error("ffmpeg wurde nicht gefunden. Die lokale Sprechererkennung kann m4a/mp4 nicht vorbereiten.")
+        ) from exc
     except RuntimeError as exc:
         raise RuntimeError(format_local_diarize_error(str(exc))) from exc
 
@@ -36,6 +47,29 @@ def run_local_diarize(
         SpeakerSegment(start=float(segment.start), end=float(segment.end), speaker=str(segment.speaker))
         for segment in result.segments
     ]
+
+
+def prepare_audio_for_local_diarize(audio_path: Path, temp_dir: Path) -> Path:
+    if audio_path.suffix.lower() == ".wav":
+        return audio_path
+
+    converted = temp_dir / f"{audio_path.stem}-diarize.wav"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(audio_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        str(converted),
+    ]
+    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return converted
 
 
 def format_local_diarize_error(details: str) -> str:

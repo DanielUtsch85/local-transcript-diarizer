@@ -1,12 +1,16 @@
 import csv
 from io import StringIO
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 
 from transcript_mvp.estimates import estimate_processing_seconds
 from transcript_mvp.feedback import build_feedback_csv
-from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error
+from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error, run_local_diarize
 from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment, format_timestamp
 from transcript_mvp.pipeline import (
     assign_speakers_by_overlap,
@@ -285,6 +289,7 @@ class PipelineTests(unittest.TestCase):
             speaker_segments_count=4,
             output_json_path="/tmp/out.json",
             include_text_samples=False,
+            local_diarization_error="Format not recognised",
         )
         rows = list(csv.DictReader(StringIO(csv_text)))
         metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
@@ -296,7 +301,39 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(metrics[("speaker_balance", "dominant_speaker_share")], "0.5")
         self.assertEqual(metrics[("resources", "samples")], "1")
         self.assertEqual(metrics[("quality", "single_segment_output")], "False")
+        self.assertEqual(metrics[("diarization", "error")], "Format not recognised")
         self.assertEqual(metrics[("privacy", "text_samples_included")], "False")
+
+    def test_run_local_diarize_converts_m4a_before_backend(self):
+        captured = {}
+
+        def fake_diarize(audio_path, **kwargs):
+            captured["audio_path"] = Path(audio_path)
+            captured["kwargs"] = kwargs
+            return types.SimpleNamespace(
+                segments=[
+                    types.SimpleNamespace(start=0.0, end=1.5, speaker="SPEAKER_00"),
+                    types.SimpleNamespace(start=1.5, end=3.0, speaker="SPEAKER_01"),
+                ]
+            )
+
+        fake_module = types.SimpleNamespace(diarize=fake_diarize)
+        completed = subprocess.CompletedProcess(args=["ffmpeg"], returncode=0)
+
+        with patch.dict(sys.modules, {"diarize": fake_module}), patch(
+            "transcript_mvp.local_diarization.subprocess.run",
+            return_value=completed,
+        ) as run:
+            segments = run_local_diarize(Path("/tmp/Steffi-Daniel.m4a"), min_speakers=1, max_speakers=2)
+
+        command = run.call_args.args[0]
+        self.assertIn("ffmpeg", command[0])
+        self.assertIn("-ar", command)
+        self.assertIn("16000", command)
+        self.assertEqual(captured["audio_path"].suffix, ".wav")
+        self.assertEqual(captured["kwargs"]["min_speakers"], 1)
+        self.assertEqual(captured["kwargs"]["max_speakers"], 2)
+        self.assertEqual([segment.speaker for segment in segments], ["SPEAKER_00", "SPEAKER_01"])
 
     def test_estimate_processing_uses_feedback_history(self):
         with tempfile.TemporaryDirectory() as directory:
