@@ -5,6 +5,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -65,6 +66,8 @@ def run_whisperx(
     try:
         env = os.environ.copy()
         env["PYTHONWARNINGS"] = "ignore"
+        venv_bin = str(Path(sys.executable).parent)
+        env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

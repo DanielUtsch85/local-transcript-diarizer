@@ -78,7 +78,7 @@ esac
 
 echo "Starting local transcription app..."
 
-python -c "from importlib.metadata import version; v=version('streamlit'); parts=tuple(int(p) for p in v.split('.')[:2]); print(f'Streamlit {v} detected.'); print('Warning: project expects streamlit>=1.40,<1.50. Run .venv/bin/python -m pip install -r requirements.txt if startup is slow.' if parts >= (1, 50) else '')"
+python3 -c "from importlib.metadata import version; v=version('streamlit'); parts=tuple(int(p) for p in v.split('.')[:2]); print(f'Streamlit {v} detected.'); print('Warning: project expects streamlit>=1.40,<1.50. Run .venv/bin/python3 -m pip install -r requirements.txt if startup is slow.' if parts >= (1, 50) else '')"
 
 if command -v curl >/dev/null 2>&1 && curl -fsS "${URL}/_stcore/health" >/dev/null 2>&1; then
   echo "App is already running: ${URL}"
@@ -90,7 +90,7 @@ if command -v curl >/dev/null 2>&1 && curl -fsS "${URL}/_stcore/health" >/dev/nu
   exit 0
 fi
 
-python -m streamlit run app.py \
+python3 -m streamlit run app.py \
   --server.headless true \
   --server.address "${HOST}" \
   --server.port "${PORT}" \
