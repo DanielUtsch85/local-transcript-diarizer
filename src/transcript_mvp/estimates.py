@@ -125,13 +125,13 @@ def parse_feedback_csv(path: Path) -> dict[str, str]:
 
 def default_ratio(*, model: str, speaker_backend: str, memory_mode: bool, no_align: bool) -> float:
     base = {
-        "tiny": 0.25,
-        "base": 0.4,
-        "small": 0.6,
-        "medium": 0.9,
-        "large-v3": 1.6,
-    }.get(model, 0.9)
-    if speaker_backend in {"Ohne Token", "diarize"}:
+        "tiny": 0.8,
+        "base": 1.2,
+        "small": 2.0,
+        "medium": 3.5,
+        "large-v3": 7.0,
+    }.get(model, 3.5)
+    if speaker_backend == "diarize":
         base += 0.15
     if not memory_mode:
         base *= 0.85

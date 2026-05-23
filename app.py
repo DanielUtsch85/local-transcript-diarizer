@@ -472,7 +472,10 @@ with st.sidebar:
             value=False,
             help="Aus Datenschutzgruenden aus. Aktivieren, wenn die CSV kleine Textproben zur Plausibilitaetspruefung enthalten soll.",
         )
-    st.caption("Speichermodus nutzt `int8`, kleine Batches und kleinere Audio-Chunks.")
+    st.caption(
+        "WhisperX nutzt immer `int8` (schneller und sparsamer auf CPU). "
+        "Speichermodus reduziert zusaetzlich Batch-Groesse und Chunk-Laenge."
+    )
 
 uploaded = st.file_uploader("MP3-Datei auswaehlen", type=["mp3", "wav", "m4a", "mp4"])
 

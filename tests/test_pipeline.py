@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-from transcript_mvp.estimates import estimate_processing_seconds
+from transcript_mvp.estimates import default_ratio, estimate_processing_seconds
 from transcript_mvp.feedback import build_feedback_csv
 from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error, run_local_diarize
 from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment, format_timestamp
@@ -472,6 +472,32 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(estimate.samples, 1)
         self.assertEqual(estimate.seconds, 160)
         self.assertEqual(estimate.source, "exakt gleiche lokale Einstellungen")
+
+    def test_default_ratio_is_conservative_for_cpu(self):
+        # Werte muessen hoch genug sein, damit Nutzer nicht von echten Laufzeiten
+        # ueberrascht werden. Groessenordnung: medium > 2x, large-v3 > 5x.
+        self.assertGreater(
+            default_ratio(model="medium", speaker_backend="diarize", memory_mode=True, no_align=True),
+            2.0,
+        )
+        self.assertGreater(
+            default_ratio(model="large-v3", speaker_backend="disabled", memory_mode=True, no_align=True),
+            5.0,
+        )
+        # "Ohne Token" darf nicht mehr als gueltiger Backend-Key fungieren.
+        ratio_without_legacy = default_ratio(
+            model="medium",
+            speaker_backend="Ohne Token",
+            memory_mode=True,
+            no_align=True,
+        )
+        ratio_disabled = default_ratio(
+            model="medium",
+            speaker_backend="disabled",
+            memory_mode=True,
+            no_align=True,
+        )
+        self.assertEqual(ratio_without_legacy, ratio_disabled)
 
 
 if __name__ == "__main__":
