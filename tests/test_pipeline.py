@@ -1,4 +1,5 @@
 import csv
+import inspect
 from io import StringIO
 from pathlib import Path
 import subprocess
@@ -123,8 +124,6 @@ class PipelineTests(unittest.TestCase):
                     output_dir=Path(directory),
                     model="base",
                     language="de",
-                    min_speakers=1,
-                    max_speakers=2,
                     batch_size=1,
                     chunk_size=10,
                     threads=4,
@@ -134,6 +133,8 @@ class PipelineTests(unittest.TestCase):
                 )
 
         process.terminate.assert_called_once_with()
+        self.assertNotIn("min_speakers", inspect.signature(run_whisperx).parameters)
+        self.assertNotIn("max_speakers", inspect.signature(run_whisperx).parameters)
 
     def test_transcript_from_stdout(self):
         transcript = transcript_from_stdout(

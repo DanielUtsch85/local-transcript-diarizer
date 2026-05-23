@@ -34,8 +34,6 @@ def run_whisperx(
     output_dir: Path,
     model: str,
     language: str | None,
-    min_speakers: int | None,
-    max_speakers: int | None,
     batch_size: int,
     chunk_size: int,
     threads: int,

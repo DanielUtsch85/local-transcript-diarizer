@@ -545,8 +545,6 @@ with left:
                         output_dir=run_dir,
                         model=model,
                         language=None if language == "auto" else language,
-                        min_speakers=min_speakers or None,
-                        max_speakers=max_speakers or None,
                         batch_size=batch_size,
                         chunk_size=chunk_size,
                         threads=threads,
