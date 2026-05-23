@@ -52,8 +52,6 @@ def run_whisperx(
         output_dir=output_dir,
         model=model,
         language=language,
-        min_speakers=min_speakers,
-        max_speakers=max_speakers,
         batch_size=batch_size,
         chunk_size=chunk_size,
         threads=threads,
@@ -142,13 +140,14 @@ def run_whisperx(
                 process.kill()
 
 
+# Sprechererkennung erfolgt separat ueber run_local_diarize().
+# WhisperX wird ausschliesslich fuer Transkription und VAD verwendet:
+# kein --diarize-Flag und keine Speaker-Constraints noetig.
 def build_whisperx_command(
     audio_path: Path,
     output_dir: Path,
     model: str,
     language: str | None,
-    min_speakers: int | None,
-    max_speakers: int | None,
     batch_size: int,
     chunk_size: int,
     threads: int,

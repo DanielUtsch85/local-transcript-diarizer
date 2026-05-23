@@ -79,8 +79,6 @@ class PipelineTests(unittest.TestCase):
             output_dir="/tmp/out",
             model="base",
             language="de",
-            min_speakers=1,
-            max_speakers=2,
             batch_size=1,
             chunk_size=10,
             threads=4,
@@ -96,7 +94,10 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("--vad_method", command)
         self.assertIn("pyannote", command)
         self.assertIn("--print_progress", command)
+        # WhisperX-Diarisierung ist bewusst deaktiviert.
         self.assertNotIn("--diarize", command)
+        self.assertNotIn("--min_speakers", command)
+        self.assertNotIn("--max_speakers", command)
 
     def test_run_whisperx_terminates_process_on_exception(self):
         process = Mock()
