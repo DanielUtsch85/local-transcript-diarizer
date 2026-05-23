@@ -608,13 +608,14 @@ with left:
                             st.session_state.segments,
                             speaker_segments,
                         )
-                        st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
                         if len(speaker_segments) == 0:
                             st.warning(
                                 "Die lokale Sprechererkennung hat keine Zeitbereiche gefunden. "
                                 "Das Transkript bleibt ohne Sprecherlabels. Bitte Min./Max.-Sprecher "
                                 "pruefen oder Diarisierung deaktivieren."
                             )
+                        else:
+                            st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
                 reporter.overall(1.0, "Fertig.")
                 processing_seconds = time.monotonic() - run_started_at
                 resource_rows = list(resource_history)
@@ -639,6 +640,7 @@ with left:
                 )
                 whisperx_command_str = " ".join(shlex.quote(str(item)) for item in whisperx_command)
 
+                # build_feedback_csv erfasst Runtime- und Paketversionen automatisch.
                 feedback_csv = build_feedback_csv(
                     source_name=st.session_state.source_name,
                     settings={

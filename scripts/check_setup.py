@@ -37,6 +37,13 @@ def main() -> int:
         print(f"{marker:5} {label}")
         failed = failed or not ok
 
+    if failed:
+        print()
+        print("Hinweise:")
+        print("  Python-Pakete und CLI-Skripte: .venv/bin/python -m pip install -r requirements.txt")
+        print("  Systemtools ffmpeg/ffprobe: brew install ffmpeg")
+        print("  Wenn whisperx module OK, aber whisperx CLI fehlt: requirements erneut installieren.")
+
     return 1 if failed else 0
 
 
