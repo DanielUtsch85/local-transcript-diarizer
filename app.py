@@ -1,4 +1,5 @@
 from collections import deque
+import datetime
 import os
 from pathlib import Path
 import signal
@@ -21,6 +22,7 @@ from transcript_mvp.local_diarization import run_local_diarize
 from transcript_mvp.models import SpeakerMapping
 from transcript_mvp.pipeline import (
     assign_speakers_by_overlap,
+    build_whisperx_command,
     create_run_dir,
     extract_speakers,
     get_audio_duration,
@@ -598,6 +600,21 @@ with left:
                 resource_rows = list(resource_history)
                 from transcript_mvp.feedback import build_feedback_csv
 
+                run_timestamp = datetime.datetime.now().isoformat(timespec="seconds")
+                audio_filename = Path(audio_path).name
+                whisperx_command = build_whisperx_command(
+                    audio_path=audio_path,
+                    output_dir=run_dir,
+                    model=model,
+                    language=None if language == "auto" else language,
+                    batch_size=batch_size,
+                    chunk_size=chunk_size,
+                    threads=threads,
+                    no_align=no_align,
+                    vad_method=vad_method,
+                )
+                whisperx_command_str = " ".join(str(item) for item in whisperx_command)
+
                 feedback_csv = build_feedback_csv(
                     source_name=st.session_state.source_name,
                     settings={
@@ -622,6 +639,9 @@ with left:
                     local_diarization_error=local_diarization_error,
                     output_json_path=str(output_json),
                     include_text_samples=include_feedback_text_samples,
+                    run_timestamp=run_timestamp,
+                    audio_filename=audio_filename,
+                    whisperx_command=whisperx_command_str,
                 )
                 feedback_path = run_dir / "feedback.csv"
                 feedback_path.write_text(feedback_csv, encoding="utf-8")

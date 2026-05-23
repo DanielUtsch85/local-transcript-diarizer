@@ -20,6 +20,9 @@ def build_feedback_csv(
     output_json_path: str | None,
     include_text_samples: bool,
     local_diarization_error: str | None = None,
+    run_timestamp: str | None = None,
+    audio_filename: str | None = None,
+    whisperx_command: str | None = None,
 ) -> str:
     rows: list[dict[str, str]] = []
 
@@ -44,7 +47,11 @@ def build_feedback_csv(
     unknown_segments = sum(1 for segment in segments if segment.speaker == "SPEAKER_UNKNOWN")
 
     add("run", "source_name", source_name)
-    add("run", "status", "success")
+    add("run", "timestamp", run_timestamp)
+    add("run", "audio_filename", audio_filename)
+    add("run", "whisperx_command", whisperx_command)
+    status = "partial" if local_diarization_error else "success"
+    add("run", "status", status)
     add("run", "output_json_path", output_json_path)
     add("audio", "duration", _round(audio_duration_seconds), "seconds")
     add("timing", "processing_time", _round(processing_seconds), "seconds")

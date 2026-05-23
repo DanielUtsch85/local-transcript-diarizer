@@ -328,11 +328,17 @@ class PipelineTests(unittest.TestCase):
             output_json_path="/tmp/out.json",
             include_text_samples=False,
             local_diarization_error="Format not recognised",
+            run_timestamp="2026-05-23T10:00:00",
+            audio_filename="sample.wav",
+            whisperx_command="whisperx sample.wav --model base",
         )
         rows = list(csv.DictReader(StringIO(csv_text)))
         metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
 
         self.assertEqual(metrics[("run", "source_name")], "sample")
+        self.assertEqual(metrics[("run", "status")], "partial")
+        self.assertIn(("run", "timestamp"), metrics)
+        self.assertIn(("run", "audio_filename"), metrics)
         self.assertEqual(metrics[("transcript", "segment_count")], "2")
         self.assertEqual(metrics[("transcript", "speaker_count")], "2")
         self.assertEqual(metrics[("transcript", "segments_per_audio_hour")], "720.0")
@@ -341,6 +347,25 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(metrics[("quality", "single_segment_output")], "False")
         self.assertEqual(metrics[("diarization", "error")], "Format not recognised")
         self.assertEqual(metrics[("privacy", "text_samples_included")], "False")
+
+    def test_build_feedback_csv_status_success_without_error(self):
+        csv_text = build_feedback_csv(
+            source_name="sample",
+            settings={"model": "base", "speaker_backend": "disabled"},
+            audio_duration_seconds=10,
+            processing_seconds=20,
+            segments=[
+                TranscriptSegment(start=0, end=5, speaker="SPEAKER_UNKNOWN", text="Hallo Welt"),
+            ],
+            resource_history=[],
+            speaker_segments_count=None,
+            output_json_path="/tmp/out.json",
+            include_text_samples=False,
+        )
+        rows = list(csv.DictReader(StringIO(csv_text)))
+        metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
+
+        self.assertEqual(metrics[("run", "status")], "success")
 
     def test_run_local_diarize_converts_m4a_before_backend(self):
         captured = {}
