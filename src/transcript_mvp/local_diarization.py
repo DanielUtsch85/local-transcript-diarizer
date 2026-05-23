@@ -50,9 +50,7 @@ def run_local_diarize(
 
 
 def prepare_audio_for_local_diarize(audio_path: Path, temp_dir: Path) -> Path:
-    if audio_path.suffix.lower() == ".wav":
-        return audio_path
-
+    # Immer nach 16 kHz mono WAV konvertieren, unabhaengig vom Quellformat.
     converted = temp_dir / f"{audio_path.stem}-diarize.wav"
     cmd = [
         "ffmpeg",

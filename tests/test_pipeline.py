@@ -372,6 +372,41 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["max_speakers"], 2)
         self.assertEqual([segment.speaker for segment in segments], ["SPEAKER_00", "SPEAKER_01"])
 
+    def test_run_local_diarize_converts_wav_to_16khz(self):
+        captured = {}
+
+        def fake_diarize(audio_path, **kwargs):
+            captured["audio_path"] = Path(audio_path)
+            captured["kwargs"] = kwargs
+            return types.SimpleNamespace(
+                segments=[
+                    types.SimpleNamespace(start=0.0, end=1.5, speaker="SPEAKER_00"),
+                    types.SimpleNamespace(start=1.5, end=3.0, speaker="SPEAKER_01"),
+                ]
+            )
+
+        fake_module = types.SimpleNamespace(diarize=fake_diarize)
+        completed = subprocess.CompletedProcess(args=["ffmpeg"], returncode=0)
+        input_path = Path("/tmp/interview.wav")
+
+        with patch.dict(sys.modules, {"diarize": fake_module}), patch(
+            "transcript_mvp.local_diarization.subprocess.run",
+            return_value=completed,
+        ) as run:
+            segments = run_local_diarize(input_path, min_speakers=1, max_speakers=2)
+
+        command = run.call_args.args[0]
+        self.assertIn("ffmpeg", command[0])
+        self.assertIn("-ar", command)
+        self.assertEqual(command[command.index("-ar") + 1], "16000")
+        self.assertIn("-ac", command)
+        self.assertEqual(command[command.index("-ac") + 1], "1")
+        self.assertEqual(captured["audio_path"].suffix, ".wav")
+        self.assertNotEqual(captured["audio_path"], input_path)
+        self.assertEqual(captured["kwargs"]["min_speakers"], 1)
+        self.assertEqual(captured["kwargs"]["max_speakers"], 2)
+        self.assertEqual([segment.speaker for segment in segments], ["SPEAKER_00", "SPEAKER_01"])
+
     def test_estimate_processing_uses_feedback_history(self):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run-1"
