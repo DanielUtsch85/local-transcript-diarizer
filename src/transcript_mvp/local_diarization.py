@@ -40,6 +40,10 @@ def run_local_diarize(
         raise RuntimeError(
             format_local_diarize_error("ffmpeg wurde nicht gefunden. Die lokale Sprechererkennung kann m4a/mp4 nicht vorbereiten.")
         ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            format_local_diarize_error(f"Dateisystemfehler bei der lokalen Sprechererkennung: {exc}")
+        ) from exc
     except RuntimeError as exc:
         raise RuntimeError(format_local_diarize_error(str(exc))) from exc
 

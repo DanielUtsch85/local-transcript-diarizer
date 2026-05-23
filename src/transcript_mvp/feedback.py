@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 from importlib.metadata import PackageNotFoundError, version
 from io import StringIO
 import platform
+from pathlib import Path
 import sys
 from typing import Any
 
@@ -115,6 +116,14 @@ def build_feedback_csv(
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue()
+
+
+def write_feedback_csv_file(path: Path, csv_text: str) -> str | None:
+    try:
+        path.write_text(csv_text, encoding="utf-8")
+    except OSError as exc:
+        return str(exc)
+    return None
 
 
 def build_environment_metadata() -> dict[str, str]:

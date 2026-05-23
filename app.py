@@ -19,11 +19,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from transcript_mvp.estimates import estimate_processing_seconds
+from transcript_mvp.diarization_flow import apply_optional_local_diarization
 from transcript_mvp.kpis import quality_notes, resource_kpis, transcript_kpis
-from transcript_mvp.local_diarization import run_local_diarize
 from transcript_mvp.models import SpeakerMapping
 from transcript_mvp.pipeline import (
-    assign_speakers_by_overlap,
     build_whisperx_command,
     create_run_dir,
     extract_speakers,
@@ -35,6 +34,7 @@ from transcript_mvp.pipeline import (
 )
 from transcript_mvp.progress import ProgressReporter
 from transcript_mvp.resources import ResourceSnapshot, collect_resource_snapshot
+from transcript_mvp.run_state import write_run_state
 
 DATA_DIR = APP_ROOT / "data"
 ResourceHistory = deque[dict[str, float | int]]
@@ -503,6 +503,13 @@ with left:
             st.session_state.last_audio_path = str(audio_path)
             st.session_state.last_run_dir = str(run_dir)
             audio_duration = get_audio_duration(audio_path)
+            write_run_state(
+                run_dir,
+                "run_created",
+                source_name=st.session_state.source_name,
+                audio_filename=Path(audio_path).name,
+                audio_duration_seconds=audio_duration,
+            )
             estimate = estimate_processing_seconds(
                 audio_seconds=audio_duration,
                 model=model,
@@ -545,6 +552,16 @@ with left:
                 )
 
                 try:
+                    write_run_state(
+                        run_dir,
+                        "whisperx_started",
+                        model=model,
+                        language=None if language == "auto" else language,
+                        batch_size=batch_size,
+                        chunk_size=chunk_size,
+                        threads=threads,
+                        vad_method=vad_method,
+                    )
                     output_json = run_whisperx(
                         audio_path=audio_path,
                         output_dir=run_dir,
@@ -558,6 +575,7 @@ with left:
                         reporter=reporter,
                     )
                 except RuntimeError as exc:
+                    write_run_state(run_dir, "whisperx_failed", error=str(exc))
                     status.update(label="Fehlgeschlagen", state="error")
                     st.error(str(exc))
                     partial_jsons = sorted(run_dir.glob("*.json"))
@@ -570,56 +588,82 @@ with left:
                 transcription_progress.progress(1.0, text="Transkription: 100.0%")
                 reporter.overall(
                     0.9 if use_local_diarize else 0.98,
-                    "Transkription abgeschlossen. Ergebnis wird geladen.",
+                        "Transkription abgeschlossen. Ergebnis wird geladen.",
                 )
                 st.write("Ergebnis wird geladen.")
+                write_run_state(run_dir, "whisperx_finished", output_json=str(output_json))
                 try:
                     transcript = load_transcript_json(output_json)
                 except (json.JSONDecodeError, OSError) as exc:
+                    write_run_state(run_dir, "json_load_failed", output_json=str(output_json), error=str(exc))
                     status.update(label="Fehlgeschlagen", state="error")
                     st.error(
                         f"WhisperX-Ergebnis konnte nicht gelesen werden: `{output_json.name}`.\n\n"
                         f"Die Datei ist moeglicherweise leer oder beschaedigt. Details: {exc}"
                     )
                     st.stop()
+                raw_segments_count = len(transcript.get("segments", []))
+                write_run_state(run_dir, "json_loaded", output_json=str(output_json), raw_segments=raw_segments_count)
                 st.session_state.segments = render_segments(
                     transcript,
                     merge_adjacent=not use_local_diarize,
                 )
+                write_run_state(run_dir, "transcript_rendered", segments=len(st.session_state.segments))
                 if use_local_diarize:
                     reporter.overall(0.9, "Lokale Sprechererkennung laeuft ohne Token.")
                     st.write("Lokale Sprechererkennung ohne Token wird ausgefuehrt.")
-                    try:
-                        speaker_segments = run_local_diarize(
-                            audio_path=audio_path,
-                            min_speakers=min_speakers or None,
-                            max_speakers=max_speakers or None,
-                        )
-                    except RuntimeError as exc:
-                        local_diarization_error = str(exc)
-                        st.warning(str(exc))
+                    st.info(
+                        "Bei langen Dateien kann die Sprechererkennung mehrere Minuten dauern. "
+                        "Die Seite wirkt waehrend dieses Schritts moeglicherweise inaktiv."
+                    )
+                    write_run_state(
+                        run_dir,
+                        "local_diarization_started",
+                        transcript_segments=len(st.session_state.segments),
+                        min_speakers=min_speakers or None,
+                        max_speakers=max_speakers or None,
+                    )
+                    diarization_outcome = apply_optional_local_diarization(
+                        st.session_state.segments,
+                        audio_path,
+                        min_speakers=min_speakers or None,
+                        max_speakers=max_speakers or None,
+                    )
+                    if diarization_outcome.error:
+                        local_diarization_error = diarization_outcome.error
+                        st.warning(local_diarization_error)
                         st.info("Das Transkript bleibt ohne Sprecherzuordnung erhalten und kann exportiert werden.")
-                        st.session_state.speaker_segments = []
-                    else:
-                        st.session_state.speaker_segments = speaker_segments
-                        speaker_segments_count = len(speaker_segments)
-                        reporter.overall(0.97, "Sprecher werden dem Transkript zugeordnet.")
-                        st.session_state.segments = assign_speakers_by_overlap(
-                            st.session_state.segments,
-                            speaker_segments,
+                        st.session_state.speaker_segments = diarization_outcome.speaker_segments
+                        write_run_state(
+                            run_dir,
+                            "local_diarization_failed",
+                            error=local_diarization_error,
+                            unexpected_error=diarization_outcome.unexpected_error,
+                            transcript_segments=len(st.session_state.segments),
                         )
-                        if len(speaker_segments) == 0:
+                    else:
+                        st.session_state.speaker_segments = diarization_outcome.speaker_segments
+                        speaker_segments_count = diarization_outcome.speaker_segments_count
+                        reporter.overall(0.97, "Sprecher werden dem Transkript zugeordnet.")
+                        st.session_state.segments = diarization_outcome.segments
+                        write_run_state(
+                            run_dir,
+                            "local_diarization_finished",
+                            speaker_segments=speaker_segments_count,
+                            transcript_segments=len(st.session_state.segments),
+                        )
+                        if speaker_segments_count == 0:
                             st.warning(
                                 "Die lokale Sprechererkennung hat keine Zeitbereiche gefunden. "
                                 "Das Transkript bleibt ohne Sprecherlabels. Bitte Min./Max.-Sprecher "
                                 "pruefen oder Diarisierung deaktivieren."
                             )
                         else:
-                            st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
+                            st.write(f"{speaker_segments_count} Sprecher-Zeitbereiche gefunden.")
                 reporter.overall(1.0, "Fertig.")
                 processing_seconds = time.monotonic() - run_started_at
                 resource_rows = list(resource_history)
-                from transcript_mvp.feedback import build_feedback_csv
+                from transcript_mvp.feedback import build_feedback_csv, write_feedback_csv_file
 
                 run_timestamp = datetime.datetime.now().isoformat(timespec="seconds")
                 audio_filename = Path(audio_path).name
@@ -671,11 +715,29 @@ with left:
                     whisperx_command=whisperx_command_str,
                 )
                 feedback_path = run_dir / "feedback.csv"
-                feedback_path.write_text(feedback_csv, encoding="utf-8")
+                feedback_write_error = write_feedback_csv_file(feedback_path, feedback_csv)
                 st.session_state.feedback_csv = feedback_csv
                 st.session_state.feedback_filename = f"{st.session_state.source_name}-feedback.csv"
-                st.write(f"Feedback-CSV erstellt: `{feedback_path}`")
+                if feedback_write_error:
+                    st.warning(f"Feedback-CSV konnte nicht geschrieben werden: {feedback_write_error}")
+                    write_run_state(
+                        run_dir,
+                        "feedback_write_failed",
+                        error=feedback_write_error,
+                        feedback_csv_written=False,
+                    )
+                else:
+                    st.write(f"Feedback-CSV erstellt: `{feedback_path}`")
+                    write_run_state(run_dir, "feedback_written", feedback_csv_written=True)
                 render_finished_kpis(audio_duration, processing_seconds, resource_rows)
+                write_run_state(
+                    run_dir,
+                    "complete",
+                    transcript_segments=len(st.session_state.segments),
+                    speaker_segments=speaker_segments_count,
+                    feedback_csv_written=feedback_write_error is None,
+                    feedback_error=feedback_write_error,
+                )
                 status.update(label="Fertig", state="complete")
 
     uploaded_json = st.file_uploader(

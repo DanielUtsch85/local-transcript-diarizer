@@ -10,8 +10,9 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from transcript_mvp.diarization_flow import apply_optional_local_diarization
 from transcript_mvp.estimates import default_ratio, estimate_processing_seconds
-from transcript_mvp.feedback import build_environment_metadata, build_feedback_csv
+from transcript_mvp.feedback import build_environment_metadata, build_feedback_csv, write_feedback_csv_file
 from transcript_mvp.kpis import quality_notes, transcript_kpis
 from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error, run_local_diarize
 from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment, format_timestamp
@@ -33,6 +34,7 @@ from transcript_mvp.pipeline import (
 )
 from transcript_mvp.progress import ProgressReporter
 from transcript_mvp.resources import _pressure_label
+from transcript_mvp.run_state import write_run_state
 
 
 class PipelineTests(unittest.TestCase):
@@ -361,6 +363,50 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any("Kein Transkript" in note for note in notes))
         self.assertFalse(any("Nur ein Sprecher" in note for note in notes))
 
+    def test_apply_optional_local_diarization_keeps_transcript_on_unexpected_error(self):
+        transcript_segments = [
+            TranscriptSegment(start=0, end=3, speaker="SPEAKER_UNKNOWN", text="Hallo"),
+        ]
+
+        def broken_diarize(audio_path, min_speakers, max_speakers):
+            raise ValueError("boom")
+
+        outcome = apply_optional_local_diarization(
+            transcript_segments,
+            Path("/tmp/audio.mp3"),
+            min_speakers=1,
+            max_speakers=2,
+            diarize_fn=broken_diarize,
+        )
+
+        self.assertEqual(outcome.segments, transcript_segments)
+        self.assertEqual(outcome.speaker_segments, [])
+        self.assertIsNone(outcome.speaker_segments_count)
+        self.assertTrue(outcome.unexpected_error)
+        self.assertIn("ValueError", outcome.error or "")
+        self.assertIn("boom", outcome.error or "")
+
+    def test_apply_optional_local_diarization_assigns_speakers_on_success(self):
+        transcript_segments = [
+            TranscriptSegment(start=0, end=3, speaker="SPEAKER_UNKNOWN", text="Hallo"),
+        ]
+
+        def successful_diarize(audio_path, min_speakers, max_speakers):
+            return [SpeakerSegment(start=0, end=3, speaker="SPEAKER_00")]
+
+        outcome = apply_optional_local_diarization(
+            transcript_segments,
+            Path("/tmp/audio.mp3"),
+            min_speakers=1,
+            max_speakers=2,
+            diarize_fn=successful_diarize,
+        )
+
+        self.assertIsNone(outcome.error)
+        self.assertFalse(outcome.unexpected_error)
+        self.assertEqual(outcome.speaker_segments_count, 1)
+        self.assertEqual(outcome.segments[0].speaker, "SPEAKER_00")
+
     def test_build_feedback_csv_contains_expected_metrics(self):
         csv_text = build_feedback_csv(
             source_name="sample",
@@ -437,6 +483,32 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("platform", metadata)
         self.assertIn("package_whisperx", metadata)
         self.assertIn("package_torch", metadata)
+
+    def test_write_feedback_csv_file_returns_error_without_crashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            error = write_feedback_csv_file(Path(directory), "category,metric,value,unit,notes\n")
+
+        self.assertIsNotNone(error)
+
+    def test_write_run_state_writes_latest_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_run_state(Path(directory), "whisperx_finished", segments=1148)
+
+            self.assertIsNotNone(path)
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["stage"], "whisperx_finished")
+        self.assertEqual(payload["segments"], 1148)
+        self.assertIn("updated_at", payload)
+
+    def test_write_run_state_ignores_write_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            not_a_directory = Path(directory) / "file"
+            not_a_directory.write_text("x", encoding="utf-8")
+
+            path = write_run_state(not_a_directory, "whisperx_finished")
+
+        self.assertIsNone(path)
 
     def test_build_feedback_csv_status_success_without_error(self):
         csv_text = build_feedback_csv(
@@ -522,6 +594,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["min_speakers"], 1)
         self.assertEqual(captured["kwargs"]["max_speakers"], 2)
         self.assertEqual([segment.speaker for segment in segments], ["SPEAKER_00", "SPEAKER_01"])
+
+    def test_run_local_diarize_formats_filesystem_errors(self):
+        fake_module = types.SimpleNamespace(diarize=Mock())
+
+        with patch.dict(sys.modules, {"diarize": fake_module}), patch(
+            "transcript_mvp.local_diarization.subprocess.run",
+            side_effect=OSError("No space left on device"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Dateisystemfehler"):
+                run_local_diarize(Path("/tmp/interview.wav"), min_speakers=1, max_speakers=2)
 
     def test_estimate_processing_uses_feedback_history(self):
         with tempfile.TemporaryDirectory() as directory:
