@@ -6,7 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from transcript_mvp.estimates import estimate_processing_seconds
 from transcript_mvp.feedback import build_feedback_csv
@@ -24,6 +24,7 @@ from transcript_mvp.pipeline import (
     is_torchvision_compatibility_error,
     parse_whisperx_progress,
     render_segments,
+    run_whisperx,
     transcript_from_stdout,
 )
 from transcript_mvp.progress import ProgressReporter
@@ -96,6 +97,42 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("pyannote", command)
         self.assertIn("--print_progress", command)
         self.assertNotIn("--diarize", command)
+
+    def test_run_whisperx_terminates_process_on_exception(self):
+        process = Mock()
+        process.stdout = iter([])
+        process.poll.return_value = None
+        process.returncode = 1
+        process.pid = 1234
+
+        reporter = ProgressReporter(
+            on_overall=lambda value, text: None,
+            on_transcription=lambda value: None,
+            on_tick=lambda elapsed, pid: (_ for _ in ()).throw(RuntimeError("stop")),
+            on_log=lambda line: None,
+        )
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "transcript_mvp.pipeline.subprocess.Popen",
+            return_value=process,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                run_whisperx(
+                    audio_path=Path("/tmp/audio.mp3"),
+                    output_dir=Path(directory),
+                    model="base",
+                    language="de",
+                    min_speakers=1,
+                    max_speakers=2,
+                    batch_size=1,
+                    chunk_size=10,
+                    threads=4,
+                    no_align=True,
+                    vad_method="pyannote",
+                    reporter=reporter,
+                )
+
+        process.terminate.assert_called_once_with()
 
     def test_transcript_from_stdout(self):
         transcript = transcript_from_stdout(

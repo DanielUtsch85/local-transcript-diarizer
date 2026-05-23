@@ -88,50 +88,58 @@ def run_whisperx(
         for line in process.stdout:
             line_queue.put(line.rstrip())
 
-    reader = threading.Thread(target=read_output, daemon=True)
-    reader.start()
+    try:
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
 
-    def handle_output_line(line: str) -> None:
-        output_lines.append(line)
-        progress = parse_whisperx_progress(line)
-        if progress is not None:
+        def handle_output_line(line: str) -> None:
+            output_lines.append(line)
+            progress = parse_whisperx_progress(line)
+            if progress is not None:
+                if reporter:
+                    reporter.transcription(progress)
+                elif on_progress:
+                    on_progress(progress)
             if reporter:
-                reporter.transcription(progress)
-            elif on_progress:
-                on_progress(progress)
-        if reporter:
-            reporter.log(line)
-        elif on_output:
-            on_output(line)
+                reporter.log(line)
+            elif on_output:
+                on_output(line)
 
-    while process.poll() is None or not line_queue.empty():
+        while process.poll() is None or not line_queue.empty():
+            while not line_queue.empty():
+                line = line_queue.get()
+                if line:
+                    handle_output_line(line)
+            if reporter:
+                reporter.tick(time.monotonic() - started_at, process.pid)
+            elif on_tick:
+                on_tick(time.monotonic() - started_at, process.pid)
+            time.sleep(0.5)
+
+        reader.join(timeout=1)
         while not line_queue.empty():
             line = line_queue.get()
             if line:
                 handle_output_line(line)
-        if reporter:
-            reporter.tick(time.monotonic() - started_at, process.pid)
-        elif on_tick:
-            on_tick(time.monotonic() - started_at, process.pid)
-        time.sleep(0.5)
 
-    reader.join(timeout=1)
-    while not line_queue.empty():
-        line = line_queue.get()
-        if line:
-            handle_output_line(line)
+        if process.returncode != 0:
+            details = "\n".join(output_lines[-80:]).strip()
+            log_path.write_text("\n".join(output_lines), encoding="utf-8")
+            raise RuntimeError(format_whisperx_error(details))
 
-    if process.returncode != 0:
-        details = "\n".join(output_lines[-80:]).strip()
         log_path.write_text("\n".join(output_lines), encoding="utf-8")
-        raise RuntimeError(format_whisperx_error(details))
 
-    log_path.write_text("\n".join(output_lines), encoding="utf-8")
-
-    json_files = sorted(output_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-    if not json_files:
-        raise FileNotFoundError("WhisperX hat keine JSON-Ausgabe erzeugt.")
-    return json_files[0]
+        json_files = sorted(output_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if not json_files:
+            raise FileNotFoundError("WhisperX hat keine JSON-Ausgabe erzeugt.")
+        return json_files[0]
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 
 def build_whisperx_command(
