@@ -84,28 +84,31 @@ def run_whisperx(
         for line in process.stdout:
             line_queue.put(line.rstrip())
 
-    try:
-        reader = threading.Thread(target=read_output, daemon=True)
-        reader.start()
+    reader = threading.Thread(target=read_output, daemon=True)
 
-        def handle_output_line(line: str) -> None:
-            output_lines.append(line)
-            progress = parse_whisperx_progress(line)
-            if progress is not None:
-                if reporter:
-                    reporter.transcription(progress)
-                elif on_progress:
-                    on_progress(progress)
+    def handle_output_line(line: str) -> None:
+        output_lines.append(line)
+        progress = parse_whisperx_progress(line)
+        if progress is not None:
             if reporter:
-                reporter.log(line)
-            elif on_output:
-                on_output(line)
+                reporter.transcription(progress)
+            elif on_progress:
+                on_progress(progress)
+        if reporter:
+            reporter.log(line)
+        elif on_output:
+            on_output(line)
 
+    def drain_output_queue() -> None:
+        while not line_queue.empty():
+            line = line_queue.get()
+            if line:
+                handle_output_line(line)
+
+    try:
+        reader.start()
         while process.poll() is None or not line_queue.empty():
-            while not line_queue.empty():
-                line = line_queue.get()
-                if line:
-                    handle_output_line(line)
+            drain_output_queue()
             if reporter:
                 reporter.tick(time.monotonic() - started_at, process.pid)
             elif on_tick:
@@ -113,10 +116,7 @@ def run_whisperx(
             time.sleep(0.5)
 
         reader.join(timeout=1)
-        while not line_queue.empty():
-            line = line_queue.get()
-            if line:
-                handle_output_line(line)
+        drain_output_queue()
 
         if process.returncode != 0:
             details = "\n".join(output_lines[-80:]).strip()
@@ -136,6 +136,12 @@ def run_whisperx(
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        reader.join(timeout=1)
+        drain_output_queue()
 
 
 # Sprechererkennung erfolgt separat ueber run_local_diarize().

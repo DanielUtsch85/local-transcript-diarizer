@@ -136,6 +136,46 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("min_speakers", inspect.signature(run_whisperx).parameters)
         self.assertNotIn("max_speakers", inspect.signature(run_whisperx).parameters)
 
+    def test_run_whisperx_waits_after_kill_timeout(self):
+        process = Mock()
+        process.stdout = iter([])
+        process.poll.return_value = None
+        process.returncode = 1
+        process.pid = 1234
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="whisperx", timeout=5),
+            None,
+        ]
+
+        reporter = ProgressReporter(
+            on_overall=lambda value, text: None,
+            on_transcription=lambda value: None,
+            on_tick=lambda elapsed, pid: (_ for _ in ()).throw(RuntimeError("stop")),
+            on_log=lambda line: None,
+        )
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "transcript_mvp.pipeline.subprocess.Popen",
+            return_value=process,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                run_whisperx(
+                    audio_path=Path("/tmp/audio.mp3"),
+                    output_dir=Path(directory),
+                    model="base",
+                    language="de",
+                    batch_size=1,
+                    chunk_size=10,
+                    threads=4,
+                    no_align=True,
+                    vad_method="pyannote",
+                    reporter=reporter,
+                )
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
     def test_transcript_from_stdout(self):
         transcript = transcript_from_stdout(
             [
