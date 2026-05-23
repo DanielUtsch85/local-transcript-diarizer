@@ -1,5 +1,6 @@
 from collections import deque
 import datetime
+import json
 import os
 from pathlib import Path
 import shlex
@@ -493,11 +494,14 @@ with left:
                 st.error("Min. Sprecher darf nicht groesser als Max. Sprecher sein.")
                 st.stop()
 
+            st.session_state.segments = []
+            st.session_state.speaker_segments = []
+            st.session_state.feedback_csv = None
+            st.session_state.feedback_filename = "feedback.csv"
             run_dir = create_run_dir(DATA_DIR / "runs", st.session_state.source_name)
             audio_path = save_upload(uploaded, DATA_DIR / "uploads")
             st.session_state.last_audio_path = str(audio_path)
             st.session_state.last_run_dir = str(run_dir)
-            st.session_state.speaker_segments = []
             audio_duration = get_audio_duration(audio_path)
             estimate = estimate_processing_seconds(
                 audio_seconds=audio_duration,
@@ -569,7 +573,15 @@ with left:
                     "Transkription abgeschlossen. Ergebnis wird geladen.",
                 )
                 st.write("Ergebnis wird geladen.")
-                transcript = load_transcript_json(output_json)
+                try:
+                    transcript = load_transcript_json(output_json)
+                except (json.JSONDecodeError, OSError) as exc:
+                    status.update(label="Fehlgeschlagen", state="error")
+                    st.error(
+                        f"WhisperX-Ergebnis konnte nicht gelesen werden: `{output_json.name}`.\n\n"
+                        f"Die Datei ist moeglicherweise leer oder beschaedigt. Details: {exc}"
+                    )
+                    st.stop()
                 st.session_state.segments = render_segments(
                     transcript,
                     merge_adjacent=not use_local_diarize,
@@ -597,6 +609,12 @@ with left:
                             speaker_segments,
                         )
                         st.write(f"{len(speaker_segments)} Sprecher-Zeitbereiche gefunden.")
+                        if len(speaker_segments) == 0:
+                            st.warning(
+                                "Die lokale Sprechererkennung hat keine Zeitbereiche gefunden. "
+                                "Das Transkript bleibt ohne Sprecherlabels. Bitte Min./Max.-Sprecher "
+                                "pruefen oder Diarisierung deaktivieren."
+                            )
                 reporter.overall(1.0, "Fertig.")
                 processing_seconds = time.monotonic() - run_started_at
                 resource_rows = list(resource_history)
@@ -604,6 +622,10 @@ with left:
 
                 run_timestamp = datetime.datetime.now().isoformat(timespec="seconds")
                 audio_filename = Path(audio_path).name
+                try:
+                    audio_size_bytes = audio_path.stat().st_size
+                except OSError:
+                    audio_size_bytes = None
                 whisperx_command = build_whisperx_command(
                     audio_path=audio_path,
                     output_dir=run_dir,
@@ -643,6 +665,7 @@ with left:
                     include_text_samples=include_feedback_text_samples,
                     run_timestamp=run_timestamp,
                     audio_filename=audio_filename,
+                    audio_size_bytes=audio_size_bytes,
                     whisperx_command=whisperx_command_str,
                 )
                 feedback_path = run_dir / "feedback.csv"
@@ -659,9 +682,11 @@ with left:
         help="Praktisch zum Nachbearbeiten ohne erneute Transkription.",
     )
     if uploaded_json is not None and st.button("JSON laden"):
-        import json
-
-        transcript = json.loads(uploaded_json.getvalue().decode("utf-8"))
+        try:
+            transcript = json.loads(uploaded_json.getvalue().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            st.error(f"JSON konnte nicht gelesen werden. Die Datei ist moeglicherweise beschaedigt. Details: {exc}")
+            st.stop()
         st.session_state.source_name = Path(uploaded_json.name).stem
         st.session_state.segments = render_segments(transcript)
         st.session_state.speaker_segments = []

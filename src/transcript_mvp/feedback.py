@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import csv
 from collections import Counter, defaultdict
+from importlib.metadata import PackageNotFoundError, version
 from io import StringIO
+import platform
+import sys
 from typing import Any
 
 from .models import TranscriptSegment
@@ -22,7 +25,9 @@ def build_feedback_csv(
     local_diarization_error: str | None = None,
     run_timestamp: str | None = None,
     audio_filename: str | None = None,
+    audio_size_bytes: int | None = None,
     whisperx_command: str | None = None,
+    environment_metadata: dict[str, Any] | None = None,
 ) -> str:
     rows: list[dict[str, str]] = []
 
@@ -54,6 +59,7 @@ def build_feedback_csv(
     add("run", "status", status)
     add("run", "output_json_path", output_json_path)
     add("audio", "duration", _round(audio_duration_seconds), "seconds")
+    add("audio", "file_size", audio_size_bytes, "bytes")
     add("timing", "processing_time", _round(processing_seconds), "seconds")
     add("timing", "processing_to_audio_ratio", _ratio(processing_seconds, audio_duration_seconds), "x audio duration")
 
@@ -71,6 +77,7 @@ def build_feedback_csv(
     add("transcript", "max_segment_duration", _max(segment_durations), "seconds")
     add("transcript", "segments_per_audio_hour", _per_hour(len(segments), audio_duration_seconds), "segments/hour")
     add("quality", "single_segment_output", len(segments) == 1)
+    add("quality", "empty_transcript", len(segments) == 0)
     add("quality", "very_long_max_segment", bool(segment_durations and max(segment_durations) > 300))
     add("quality", "all_text_one_speaker", len(speakers) == 1 and len(segments) > 1)
     add("diarization", "speaker_time_segments", speaker_segments_count)
@@ -95,6 +102,7 @@ def build_feedback_csv(
     )
 
     add_resource_summary(rows, resource_history)
+    add_environment_summary(rows, environment_metadata)
 
     if include_text_samples:
         for label, segment in sample_segments(segments):
@@ -107,6 +115,40 @@ def build_feedback_csv(
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue()
+
+
+def build_environment_metadata() -> dict[str, str]:
+    packages = ["whisperx", "diarize", "torch", "torchaudio", "torchvision", "streamlit"]
+    metadata = {
+        "python_version": sys.version.split()[0],
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "machine": platform.machine(),
+    }
+    for package in packages:
+        metadata[f"package_{package}"] = _package_version(package)
+    return metadata
+
+
+def add_environment_summary(rows: list[dict[str, str]], metadata: dict[str, Any] | None = None) -> None:
+    metadata = metadata if metadata is not None else build_environment_metadata()
+    for key, value in metadata.items():
+        rows.append(
+            {
+                "category": "environment",
+                "metric": key,
+                "value": "" if value is None else str(value),
+                "unit": "",
+                "notes": "",
+            }
+        )
+
+
+def _package_version(package_name: str) -> str:
+    try:
+        return version(package_name)
+    except PackageNotFoundError:
+        return "not installed"
 
 
 def add_resource_summary(rows: list[dict[str, str]], resource_history: list[dict]) -> None:

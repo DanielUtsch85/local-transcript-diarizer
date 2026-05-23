@@ -1,5 +1,6 @@
 import csv
 import inspect
+import json
 from io import StringIO
 from pathlib import Path
 import subprocess
@@ -10,7 +11,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from transcript_mvp.estimates import default_ratio, estimate_processing_seconds
-from transcript_mvp.feedback import build_feedback_csv
+from transcript_mvp.feedback import build_environment_metadata, build_feedback_csv
+from transcript_mvp.kpis import quality_notes, transcript_kpis
 from transcript_mvp.local_diarization import format_local_diarize_error, is_corrupt_silero_vad_error, run_local_diarize
 from transcript_mvp.models import SpeakerMapping, SpeakerSegment, TranscriptSegment, format_timestamp
 from transcript_mvp.pipeline import (
@@ -23,6 +25,7 @@ from transcript_mvp.pipeline import (
     is_missing_model_cache_error,
     is_silero_download_error,
     is_torchvision_compatibility_error,
+    load_transcript_json,
     parse_whisperx_progress,
     render_segments,
     run_whisperx,
@@ -189,6 +192,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(transcript["segments"][0]["start"], 4655.911)
         self.assertEqual(transcript["segments"][0]["text"], "Und jetzt sehen ich was.")
 
+    def test_load_transcript_json_raises_on_empty_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "empty.json"
+            path.write_text("", encoding="utf-8")
+
+            with self.assertRaises(json.JSONDecodeError):
+                load_transcript_json(path)
+
     def test_parse_whisperx_progress(self):
         self.assertEqual(parse_whisperx_progress("Progress: 98.81%..."), 0.9881)
         self.assertEqual(parse_whisperx_progress("Progress: 100.00%..."), 1.0)
@@ -344,6 +355,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(_pressure_label(88), "hoch")
         self.assertEqual(_pressure_label(95), "kritisch")
 
+    def test_quality_notes_empty_segments_no_speaker_warning(self):
+        notes = quality_notes(transcript_kpis([], 60.0))
+
+        self.assertTrue(any("Kein Transkript" in note for note in notes))
+        self.assertFalse(any("Nur ein Sprecher" in note for note in notes))
+
     def test_build_feedback_csv_contains_expected_metrics(self):
         csv_text = build_feedback_csv(
             source_name="sample",
@@ -371,7 +388,9 @@ class PipelineTests(unittest.TestCase):
             local_diarization_error="Format not recognised",
             run_timestamp="2026-05-23T10:00:00",
             audio_filename="sample.wav",
+            audio_size_bytes=12345,
             whisperx_command="whisperx sample.wav --model base",
+            environment_metadata={"python_version": "3.11.15", "platform": "macOS-test"},
         )
         rows = list(csv.DictReader(StringIO(csv_text)))
         metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
@@ -380,14 +399,44 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(metrics[("run", "status")], "partial")
         self.assertIn(("run", "timestamp"), metrics)
         self.assertIn(("run", "audio_filename"), metrics)
+        self.assertEqual(metrics[("audio", "file_size")], "12345")
         self.assertEqual(metrics[("transcript", "segment_count")], "2")
         self.assertEqual(metrics[("transcript", "speaker_count")], "2")
         self.assertEqual(metrics[("transcript", "segments_per_audio_hour")], "720.0")
         self.assertEqual(metrics[("speaker_balance", "dominant_speaker_share")], "0.5")
         self.assertEqual(metrics[("resources", "samples")], "1")
         self.assertEqual(metrics[("quality", "single_segment_output")], "False")
+        self.assertEqual(metrics[("quality", "empty_transcript")], "False")
+        self.assertEqual(metrics[("environment", "python_version")], "3.11.15")
+        self.assertEqual(metrics[("environment", "platform")], "macOS-test")
         self.assertEqual(metrics[("diarization", "error")], "Format not recognised")
         self.assertEqual(metrics[("privacy", "text_samples_included")], "False")
+
+    def test_build_feedback_csv_marks_empty_transcript(self):
+        csv_text = build_feedback_csv(
+            source_name="empty",
+            settings={"model": "base", "speaker_backend": "disabled"},
+            audio_duration_seconds=10,
+            processing_seconds=20,
+            segments=[],
+            resource_history=[],
+            speaker_segments_count=None,
+            output_json_path="/tmp/out.json",
+            include_text_samples=False,
+            environment_metadata={},
+        )
+        rows = list(csv.DictReader(StringIO(csv_text)))
+        metrics = {(row["category"], row["metric"]): row["value"] for row in rows}
+
+        self.assertEqual(metrics[("quality", "empty_transcript")], "True")
+
+    def test_build_environment_metadata_contains_runtime_versions(self):
+        metadata = build_environment_metadata()
+
+        self.assertIn("python_version", metadata)
+        self.assertIn("platform", metadata)
+        self.assertIn("package_whisperx", metadata)
+        self.assertIn("package_torch", metadata)
 
     def test_build_feedback_csv_status_success_without_error(self):
         csv_text = build_feedback_csv(

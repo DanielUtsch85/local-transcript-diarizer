@@ -110,9 +110,11 @@ These exports are useful when transcription and speaker detection are done in on
 Each completed run creates a feedback CSV with:
 
 - runtime and audio-duration ratio
+- run timestamp, audio filename, audio file size, and the executed WhisperX command
 - selected settings
 - transcript segment and speaker counts
 - speaker duration balance
+- Python, platform, and relevant package versions for troubleshooting
 - CPU, RAM, and memory-pressure peaks/averages
 - quality flags for suspicious outputs
 - optional short text samples, disabled by default for privacy
@@ -148,7 +150,7 @@ The Voice-Pipeline page can use the current audio and speaker segments from the 
 
 Audio files, generated transcripts, feedback CSVs, local runs, model caches, and virtual environments are not meant to be committed. The `.gitignore` excludes local uploads and run artifacts by default.
 
-Before publishing or sharing logs, check that they do not contain private transcript excerpts. Files under `data/` and files downloaded to your local `Downloads` folder are not published to GitHub unless you explicitly add and commit them.
+Before publishing or sharing logs, check that they do not contain private transcript excerpts. Feedback CSVs include local diagnostic metadata such as the uploaded audio filename and executed command. Files under `data/` and files downloaded to your local `Downloads` folder are not published to GitHub unless you explicitly add and commit them.
 
 Voice synthesis and voice-cloning workflows must only be used with explicit consent from the target speaker. Generated audio must be disclosed as synthetic.
 

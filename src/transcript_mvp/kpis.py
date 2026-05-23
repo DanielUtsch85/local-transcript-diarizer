@@ -76,7 +76,7 @@ def quality_notes(kpis: TranscriptKpis) -> list[str]:
     notes = []
     if kpis.segment_count == 0:
         notes.append("Kein Transkript erzeugt.")
-    if kpis.speaker_count <= 1:
+    elif kpis.speaker_count <= 1:
         notes.append("Nur ein Sprecher erkannt. Bei Interviews bitte Ergebnis pruefen.")
     if kpis.max_segment_duration and kpis.max_segment_duration > 180:
         notes.append("Mindestens ein Abschnitt ist sehr lang. Das Word-Dokument kann schwer lesbar sein.")
