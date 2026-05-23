@@ -2,6 +2,7 @@ from collections import deque
 import datetime
 import os
 from pathlib import Path
+import shlex
 import signal
 import sys
 import threading
@@ -614,7 +615,7 @@ with left:
                     no_align=no_align,
                     vad_method=vad_method,
                 )
-                whisperx_command_str = " ".join(str(item) for item in whisperx_command)
+                whisperx_command_str = " ".join(shlex.quote(str(item)) for item in whisperx_command)
 
                 feedback_csv = build_feedback_csv(
                     source_name=st.session_state.source_name,
